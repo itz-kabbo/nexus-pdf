@@ -9,8 +9,8 @@ SS = 4
 s, m, r = S * SS, M * SS, R * SS
 
 # ---- 渐变底 (与轻影同款: 亮蓝 -> 深蓝) ----
-top = (61, 127, 255)
-bottom = (11, 74, 204)
+top = (107, 219, 255)   # #6BDBFF 青
+bottom = (46, 139, 255) # #2E8BFF 亮蓝
 grad = Image.new("RGB", (s, s))
 px = grad.load()
 for y in range(s):
@@ -53,11 +53,11 @@ icon.paste((255, 255, 255, 255), (0, 0), page)
 # 折角: 浅蓝三角 (翻折的背面)
 d.polygon(
     [(px0 + pw - fold, py0), (px0 + pw - fold, py0 + fold), (px0 + pw, py0 + fold)],
-    fill=(178, 205, 255, 255),
+    fill=(203, 241, 255, 255),
 )
 
 # 页面上的文字线条 (淡蓝)
-line_c = (120, 165, 255, 255)
+line_c = (110, 195, 255, 255)
 lw = int(s * 0.026)
 lx = px0 + pw * 0.18
 for i, wfrac in enumerate([0.42, 0.64, 0.64, 0.45]):
