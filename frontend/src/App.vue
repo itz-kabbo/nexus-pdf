@@ -4,7 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readFile } from '@tauri-apps/plugin-fs'
 import {
-  openPdf, parseRange, makeOverlayCanvas,
+  openPdf, openPdfBytes, parseRange, makeOverlayCanvas,
   watermarkLayer, watermarkRaster, extractPages, rotatePages, mergePdfs,
   exportImages, compressPdf, encryptPdf, decryptPdf,
   saveBytes, outputPath, fileSize, revealFile,
@@ -450,7 +450,54 @@ async function applyCompress() {
 // ---------- 拖拽与生命周期 ----------
 let unlistenDrop = null
 
+// 演示模式: ?demo=<tool> 加载内置示例文档, 供文档截图, 不依赖 Tauri
+const DEMO = new URLSearchParams(location.search).get('demo')
+
+async function seedDemo(t) {
+  if (t === 'pwcard') {
+    pwPrompt.show = true
+    pwPrompt.name = '董事会纪要-机密.pdf'
+    return
+  }
+  const res = await fetch('/demo.pdf')
+  const raw = new Uint8Array(await res.arrayBuffer())
+  const { bytes, pdf } = await openPdfBytes(raw)
+  const sizes = []
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const vp = (await pdf.getPage(i)).getViewport({ scale: 1 })
+    sizes.push({ w: vp.width, h: vp.height })
+  }
+  doc.value = {
+    path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf',
+    size: 2836582, bytes, pdf, pageCount: pdf.numPages, sizes, password: '',
+  }
+  mergeList.value = [
+    { path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf' },
+    { path: '/demo/附录A-财务数据.pdf', name: '附录A-财务数据.pdf' },
+    { path: '/demo/附录B-用户调研.pdf', name: '附录B-用户调研.pdf' },
+  ]
+  if (t && t !== 'read') tool.value = t
+  if (t === 'pages') selected.value = new Set([1, 3, 4])
+  if (t === 'protect') Object.assign(prot, { pw: 'demo-1234', pw2: 'demo-1234', noPrint: true, noCopy: true })
+  if (t === 'watermark') wm.opacity = 30
+  await nextTick()
+  zoomFit()
+  await nextTick()
+  // 截图环境里 IntersectionObserver 不可靠: 直接急切渲染
+  if (tool.value === 'pages') {
+    for (let i = 0; i < pdf.numPages; i++) await renderThumb(i)
+  } else {
+    for (let i = 0; i < Math.min(3, pdf.numPages); i++) await renderPage(i)
+  }
+  refreshPreview()
+  document.title = 'DEMO_READY'
+}
+
 onMounted(async () => {
+  if (DEMO) {
+    seedDemo(DEMO)
+    return
+  }
   unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
     const t = event.payload.type
     if (t === 'drop') {

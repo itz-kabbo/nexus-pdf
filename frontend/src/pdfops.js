@@ -29,6 +29,13 @@ export async function openPdf(path, password) {
   return { bytes: copy, pdf }
 }
 
+// 从内存字节打开 (demo 截图模式用, 不经文件系统)
+export async function openPdfBytes(bytes) {
+  const copy = new Uint8Array(bytes)
+  const pdf = await pdfjs.getDocument({ data: bytes }).promise
+  return { bytes: copy, pdf }
+}
+
 // pdf-lib 侧统一的带密码加载
 function loadDoc(bytes, password) {
   return PDFDocument.load(bytes, password ? { password } : undefined)
