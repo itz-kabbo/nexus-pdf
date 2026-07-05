@@ -1,7 +1,7 @@
 // PDF 操作核心: pdf.js 负责渲染/栅格化, pdf-lib 负责重组/叠加, 全部本地完成
 import * as pdfjs from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import { PDFDocument, degrees } from 'pdf-lib'
+import { PDFDocument, degrees } from '@cantoo/pdf-lib'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -20,12 +20,34 @@ export function revealFile(path) {
 }
 
 // 打开 PDF: 返回 { bytes, pdf } — bytes 供 pdf-lib 重组, pdf 供渲染
-export async function openPdf(path) {
+// 加密文档传入 password; 密码错误/缺失时 pdf.js 抛 PasswordException
+export async function openPdf(path, password) {
   const bytes = await readFile(path)
   // pdf.js 会接管传入的 buffer, 复制一份保留给 pdf-lib
   const copy = new Uint8Array(bytes)
-  const pdf = await pdfjs.getDocument({ data: bytes, cMapUrl: undefined }).promise
+  const pdf = await pdfjs.getDocument({ data: bytes, password, cMapUrl: undefined }).promise
   return { bytes: copy, pdf }
+}
+
+// pdf-lib 侧统一的带密码加载
+function loadDoc(bytes, password) {
+  return PDFDocument.load(bytes, password ? { password } : undefined)
+}
+
+// ---------- 加密 / 解密 ----------
+export async function encryptPdf(bytes, password, { noPrint, noCopy }, srcPassword) {
+  const doc = await loadDoc(bytes, srcPassword)
+  doc.encrypt({
+    userPassword: password,
+    ownerPassword: password,
+    permissions: { printing: noPrint ? false : 'highResolution', copying: !noCopy },
+  })
+  return doc.save()
+}
+
+export async function decryptPdf(bytes, password) {
+  const doc = await loadDoc(bytes, password)
+  return doc.save() // 重存即去除加密
 }
 
 // "1-3,5,8-10" -> 0 基页码 Set; 空串/all = 全部
@@ -138,8 +160,8 @@ function canvasToJpgBytes(cv, quality) {
 // ---------- 图层水印: pdf-lib 在原页面上叠加透明 PNG, 文件几乎不变大 ----------
 // 页面可能带 /Rotate 属性(扫描件/横向页常见): 覆盖层按"显示尺寸"生成,
 // 再反向旋转画回页面坐标系, 保证阅读器里水印方向始终端正
-export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress) {
-  const doc = await PDFDocument.load(bytes)
+export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress, password) {
+  const doc = await loadDoc(bytes, password)
   const pages = doc.getPages()
   // 相同 尺寸+旋转 的页共享一个覆盖层图片 (PDF 里同一 XObject 只存一份)
   const cache = new Map()
@@ -173,8 +195,8 @@ export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress) {
 }
 
 // ---------- 栅格水印: 范围内的页整页渲染成像素+水印(无法移除), 范围外保留原始矢量 ----------
-export async function watermarkRaster(bytes, pdf, range, wmOpts, dpi, quality, onProgress) {
-  const src = await PDFDocument.load(bytes)
+export async function watermarkRaster(bytes, pdf, range, wmOpts, dpi, quality, onProgress, password) {
+  const src = await loadDoc(bytes, password)
   const out = await PDFDocument.create()
   const scale = dpi / 72
   let done = 0
@@ -207,8 +229,8 @@ export async function watermarkRaster(bytes, pdf, range, wmOpts, dpi, quality, o
 }
 
 // ---------- 页面操作 ----------
-export async function extractPages(bytes, keep) {
-  const src = await PDFDocument.load(bytes)
+export async function extractPages(bytes, keep, password) {
+  const src = await loadDoc(bytes, password)
   const out = await PDFDocument.create()
   const idx = [...keep].sort((a, b) => a - b)
   const copied = await out.copyPages(src, idx)
@@ -216,8 +238,8 @@ export async function extractPages(bytes, keep) {
   return out.save()
 }
 
-export async function rotatePages(bytes, targets, delta) {
-  const doc = await PDFDocument.load(bytes)
+export async function rotatePages(bytes, targets, delta, password) {
+  const doc = await loadDoc(bytes, password)
   doc.getPages().forEach((p, i) => {
     if (targets.has(i)) p.setRotation(degrees(((p.getRotation().angle + delta) % 360 + 360) % 360))
   })
@@ -229,7 +251,13 @@ export async function mergePdfs(paths, onProgress) {
   let done = 0
   for (const path of paths) {
     const bytes = await readFile(path)
-    const src = await PDFDocument.load(bytes, { ignoreEncryption: false })
+    let src
+    try {
+      src = await PDFDocument.load(bytes)
+    } catch (e) {
+      const name = path.split(/[/\\]/).pop()
+      throw new Error(`「${name}」是加密文件，请先用「解密」工具去除密码后再合并`)
+    }
     const copied = await out.copyPages(src, src.getPageIndices())
     copied.forEach((p) => out.addPage(p))
     onProgress?.(++done)

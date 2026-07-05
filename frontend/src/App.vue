@@ -6,7 +6,8 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import {
   openPdf, parseRange, makeOverlayCanvas,
   watermarkLayer, watermarkRaster, extractPages, rotatePages, mergePdfs,
-  exportImages, compressPdf, saveBytes, outputPath, fileSize, revealFile,
+  exportImages, compressPdf, encryptPdf, decryptPdf,
+  saveBytes, outputPath, fileSize, revealFile,
 } from './pdfops.js'
 import { ICONS } from './icons.js'
 
@@ -17,6 +18,8 @@ const NAV = [
   { id: 'merge', name: '合并 PDF', desc: '多个 PDF 按顺序合成一个文件' },
   { id: 'export', name: '转图片', desc: '把页面导出为 PNG 或 JPG 图片' },
   { id: 'compress', name: '压缩 PDF', desc: '整页栅格化重建，大幅缩小扫描件体积' },
+  { id: 'protect', name: '加密', desc: '设置打开密码，可附加禁止打印、禁止复制的权限限制' },
+  { id: 'unlock', name: '解密', desc: '用已知密码打开后，输出一份无密码副本' },
 ]
 
 const tool = ref('read')
@@ -25,6 +28,7 @@ const errorMsg = ref('')
 const dragging = ref(false)
 const lastResult = ref(null) // { label, path, extra }
 const busy = reactive({ active: false, stage: '', done: 0, total: 0 })
+const pwPrompt = reactive({ show: false, path: '', name: '', value: '', wrong: false })
 
 // ---------- 打开文档 ----------
 async function pickAndOpen() {
@@ -32,12 +36,14 @@ async function pickAndOpen() {
   if (typeof path === 'string') await loadDoc(path)
 }
 
-async function loadDoc(path) {
+async function loadDoc(path, password) {
   errorMsg.value = ''
   lastResult.value = null
   try {
     busyStart('正在打开文档', 1)
-    const { bytes, pdf } = await openPdf(path)
+    const { bytes, pdf } = await openPdf(path, password)
+    pwPrompt.show = false
+    pwPrompt.value = ''
     const sizes = []
     for (let i = 1; i <= pdf.numPages; i++) {
       const vp = (await pdf.getPage(i)).getViewport({ scale: 1 })
@@ -50,6 +56,7 @@ async function loadDoc(path) {
       bytes, pdf,
       pageCount: pdf.numPages,
       sizes,
+      password: password || '',
     }
     renderVersion++
     renderedSet.clear()
@@ -63,10 +70,23 @@ async function loadDoc(path) {
     if (tool.value === 'pages') setupThumbObserver()
     else setupObserver()
   } catch (e) {
-    errorMsg.value = /password/i.test(String(e)) ? '这份 PDF 有密码保护，暂不支持加密文档' : '打开失败：' + (e.message || e)
+    if (e?.name === 'PasswordException' || /password/i.test(String(e?.name || e))) {
+      // 加密文档: 弹出密码输入, 输对后重新加载
+      pwPrompt.show = true
+      pwPrompt.path = path
+      pwPrompt.name = path.split(/[/\\]/).pop()
+      pwPrompt.wrong = !!password
+      doc.value = null
+    } else {
+      errorMsg.value = '打开失败：' + (e.message || e)
+    }
   } finally {
     busyEnd()
   }
+}
+
+function submitPassword() {
+  if (pwPrompt.value) loadDoc(pwPrompt.path, pwPrompt.value)
 }
 
 function closeDoc() {
@@ -292,6 +312,34 @@ function moveMerge(i, dir) {
 // ---------- 转图片 / 压缩 设置 ----------
 const exp = reactive({ format: 'png', dpi: 200, range: '' })
 const cmp = reactive({ dpi: 150, quality: 0.8 })
+const prot = reactive({ pw: '', pw2: '', noPrint: false, noCopy: false })
+
+async function applyProtect() {
+  await runTask(async () => {
+    const d = doc.value
+    if (!prot.pw) throw new Error('请输入打开密码')
+    if (prot.pw !== prot.pw2) throw new Error('两次输入的密码不一致')
+    busyStart('加密文档', 1)
+    const bytes = await encryptPdf(d.bytes, prot.pw, { noPrint: prot.noPrint, noCopy: prot.noCopy }, d.password)
+    const out = await outputPath(d.path, '_加密')
+    const size = await saveBytes(out, bytes)
+    lastResult.value = { label: '已加密，请妥善保管密码', path: out, extra: fmtSize(size) }
+    prot.pw = ''
+    prot.pw2 = ''
+  })
+}
+
+async function applyUnlock() {
+  await runTask(async () => {
+    const d = doc.value
+    if (!d.password) throw new Error('当前文档没有打开密码，无需解密')
+    busyStart('移除密码', 1)
+    const bytes = await decryptPdf(d.bytes, d.password)
+    const out = await outputPath(d.path, '_解密')
+    const size = await saveBytes(out, bytes)
+    lastResult.value = { label: '已输出无密码副本', path: out, extra: fmtSize(size) }
+  })
+}
 
 // ---------- 任务执行 ----------
 function busyStart(stage, total) {
@@ -329,8 +377,8 @@ async function applyWatermark() {
     const onP = (n) => (busy.done = n)
     const bytes =
       wm.mode === 'layer'
-        ? await watermarkLayer(d.bytes, d.pdf, range, opts, onP)
-        : await watermarkRaster(d.bytes, d.pdf, range, opts, wm.dpi, 0.86, onP)
+        ? await watermarkLayer(d.bytes, d.pdf, range, opts, onP, d.password)
+        : await watermarkRaster(d.bytes, d.pdf, range, opts, wm.dpi, 0.86, onP, d.password)
     const out = await outputPath(d.path, '_水印')
     const size = await saveBytes(out, bytes)
     lastResult.value = { label: '水印已添加', path: out, extra: fmtSize(size) }
@@ -345,15 +393,15 @@ async function applyPages(action) {
     busyStart('处理页面', 1)
     let bytes, suffix
     if (action === 'extract') {
-      bytes = await extractPages(d.bytes, sel)
+      bytes = await extractPages(d.bytes, sel, d.password)
       suffix = '_提取'
     } else if (action === 'delete') {
       if (sel.size >= d.pageCount) throw new Error('不能删除全部页面')
       const keep = new Set(Array.from({ length: d.pageCount }, (_, i) => i).filter((i) => !sel.has(i)))
-      bytes = await extractPages(d.bytes, keep)
+      bytes = await extractPages(d.bytes, keep, d.password)
       suffix = '_删页'
     } else {
-      bytes = await rotatePages(d.bytes, sel, 90)
+      bytes = await rotatePages(d.bytes, sel, 90, d.password)
       suffix = '_旋转'
     }
     const out = await outputPath(d.path, suffix)
@@ -448,6 +496,8 @@ const emptyCopy = computed(() => {
     pages: '拖入 PDF，开始管理页面',
     export: '拖入 PDF，导出为图片',
     compress: '拖入要压缩的 PDF',
+    protect: '拖入要加密的 PDF',
+    unlock: '拖入要解密的 PDF（需要知道它的密码）',
   }
   return map[tool.value] || map.read
 })
@@ -473,7 +523,7 @@ const emptyCopy = computed(() => {
           :class="{ active: tool === n.id }"
           @click="tool = n.id"
         >
-          <span class="nav-icon" v-html="ICONS[n.id === 'read' ? 'read' : n.id === 'pages' ? 'pages' : n.id === 'merge' ? 'merge' : n.id === 'export' ? 'image' : n.id === 'compress' ? 'compress' : 'watermark']"></span>
+          <span class="nav-icon" v-html="ICONS[{ read: 'read', pages: 'pages', merge: 'merge', export: 'image', compress: 'compress', protect: 'lock', unlock: 'unlock' }[n.id] || 'watermark']"></span>
           <span class="nav-label">{{ n.name }}</span>
         </button>
       </nav>
@@ -496,8 +546,29 @@ const emptyCopy = computed(() => {
 
       <!-- 未打开文档 -->
       <div v-if="!doc" class="empty">
+        <!-- 加密文档: 密码输入 -->
+        <div v-if="pwPrompt.show" class="pw-card">
+          <span class="dropzone-icon pw-icon" v-html="ICONS.lock"></span>
+          <div class="pw-title">「{{ pwPrompt.name }}」有密码保护</div>
+          <div class="pw-hint" :class="{ wrong: pwPrompt.wrong }">
+            {{ pwPrompt.wrong ? '密码不对，再试一次' : '输入打开密码继续' }}
+          </div>
+          <input
+            class="tinput"
+            type="password"
+            v-model="pwPrompt.value"
+            placeholder="打开密码"
+            @keyup.enter="submitPassword"
+            autofocus
+          />
+          <div class="pw-actions">
+            <button class="btn ghost" @click="pwPrompt.show = false">取消</button>
+            <button class="btn primary" :disabled="!pwPrompt.value" @click="submitPassword">解锁打开</button>
+          </div>
+        </div>
+
         <!-- 合并不需要先开文档: 直接给独立工作区 -->
-        <div v-if="tool === 'merge'" class="merge-standalone">
+        <div v-else-if="tool === 'merge'" class="merge-standalone">
           <div class="panel-head">
             <h2>合并 PDF</h2>
             <p>把多个 PDF 按顺序合成一个文件，拖进窗口或点击添加</p>
@@ -521,7 +592,7 @@ const emptyCopy = computed(() => {
 
         <!-- 其余工具: 带工具语境的打开引导 -->
         <div v-else class="dropzone" @click="pickAndOpen">
-          <span class="dropzone-icon" v-html="ICONS[tool === 'read' ? 'read' : tool === 'pages' ? 'pages' : tool === 'export' ? 'image' : tool === 'compress' ? 'compress' : 'watermark']"></span>
+          <span class="dropzone-icon" v-html="ICONS[{ read: 'read', pages: 'pages', export: 'image', compress: 'compress', protect: 'lock', unlock: 'unlock' }[tool] || 'watermark']"></span>
           <div class="dropzone-title">{{ emptyCopy }}</div>
           <div class="dropzone-hint">阅读 · 加水印(图层/防删除) · 页面管理 · 合并 · 转图片 · 压缩 — 全部本地完成</div>
         </div>
@@ -727,6 +798,40 @@ const emptyCopy = computed(() => {
               <div class="field-hint pad-top">图片保存在原文档旁边，按页码编号</div>
             </template>
 
+            <!-- 加密 -->
+            <template v-else-if="tool === 'protect'">
+              <div class="field">
+                <div class="field-label">打开密码</div>
+                <input class="tinput" type="password" v-model="prot.pw" placeholder="设置打开密码" />
+              </div>
+              <div class="field">
+                <div class="field-label">确认密码</div>
+                <input class="tinput" type="password" v-model="prot.pw2" placeholder="再输一遍" @keyup.enter="applyProtect" />
+              </div>
+              <div class="field">
+                <div class="field-label">权限限制</div>
+                <div class="segmented">
+                  <button :class="{ active: prot.noPrint }" @click="prot.noPrint = !prot.noPrint">禁止打印</button>
+                  <button :class="{ active: prot.noCopy }" @click="prot.noCopy = !prot.noCopy">禁止复制</button>
+                </div>
+                <div class="field-hint">AES 加密。密码丢了没有任何后门可以找回，务必记牢</div>
+              </div>
+              <button class="btn primary wide" @click="applyProtect">加密输出</button>
+            </template>
+
+            <!-- 解密 -->
+            <template v-else-if="tool === 'unlock'">
+              <div class="field" v-if="doc.password">
+                <div class="field-label">当前文档已用密码解锁</div>
+                <div class="field-hint">输出一份无密码副本，之后任何人都能直接打开</div>
+              </div>
+              <div class="field" v-else>
+                <div class="field-label">当前文档没有打开密码</div>
+                <div class="field-hint">无需解密。要处理加密文件，直接打开它并输入密码即可</div>
+              </div>
+              <button class="btn primary wide" :disabled="!doc.password" @click="applyUnlock">移除密码输出</button>
+            </template>
+
             <!-- 压缩 -->
             <template v-else-if="tool === 'compress'">
               <div class="field">
@@ -886,6 +991,43 @@ const emptyCopy = computed(() => {
   flex-direction: column;
   gap: 14px;
 }
+.pw-card {
+  align-self: center;
+  width: min(400px, 100%);
+  background: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+}
+.pw-icon {
+  margin-bottom: 2px;
+}
+.pw-title {
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.pw-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.pw-hint.wrong {
+  color: var(--danger);
+}
+.pw-card .tinput {
+  text-align: center;
+}
+.pw-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 .merge-standalone .btn.primary:disabled {
   opacity: 0.4;
   cursor: not-allowed;

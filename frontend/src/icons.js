@@ -27,6 +27,14 @@ export const ICONS = {
   compress: wrap(
     '<polyline points="4.5 9.5 9.5 9.5 9.5 4.5"/><polyline points="19.5 14.5 14.5 14.5 14.5 19.5"/><line x1="9.5" y1="9.5" x2="4" y2="4"/><line x1="14.5" y1="14.5" x2="20" y2="20"/>'
   ),
+  // 加密: 挂锁
+  lock: wrap(
+    '<rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/><circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none"/>'
+  ),
+  // 解密: 开锁 (锁梁弹开)
+  unlock: wrap(
+    '<rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 7.7-1.5"/><circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none"/>'
+  ),
   plus: wrap('<line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/>'),
   close: wrap('<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>'),
   // 品牌: 折角书页 (与应用图标同构)
