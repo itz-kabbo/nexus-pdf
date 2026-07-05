@@ -38,6 +38,7 @@ export function parseRange(str, pageCount) {
     if (!p) continue
     const m = p.match(/^(\d+)\s*[-—~]\s*(\d+)$/)
     if (m) {
+      if (+m[1] > +m[2]) throw new Error(`页码范围 "${p}" 应从小到大, 如 ${m[2]}-${m[1]}`)
       const a = Math.max(1, +m[1])
       const b = Math.min(pageCount, +m[2])
       for (let i = a; i <= b; i++) set.add(i - 1)
@@ -135,24 +136,36 @@ function canvasToJpgBytes(cv, quality) {
 }
 
 // ---------- 图层水印: pdf-lib 在原页面上叠加透明 PNG, 文件几乎不变大 ----------
+// 页面可能带 /Rotate 属性(扫描件/横向页常见): 覆盖层按"显示尺寸"生成,
+// 再反向旋转画回页面坐标系, 保证阅读器里水印方向始终端正
 export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress) {
   const doc = await PDFDocument.load(bytes)
   const pages = doc.getPages()
-  // 相同尺寸的页共享一个覆盖层图片 (PDF 里同一 XObject 只存一份)
+  // 相同 尺寸+旋转 的页共享一个覆盖层图片 (PDF 里同一 XObject 只存一份)
   const cache = new Map()
   let done = 0
   for (let i = 0; i < pages.length; i++) {
     if (!range.has(i)) continue
     const page = pages[i]
     const { width: pw, height: ph } = page.getSize()
-    const key = `${Math.round(pw)}x${Math.round(ph)}`
+    const rot = (((page.getRotation().angle || 0) % 360) + 360) % 360
+    const vw = rot % 180 === 0 ? pw : ph // 显示宽高
+    const vh = rot % 180 === 0 ? ph : pw
+    const key = `${Math.round(vw)}x${Math.round(vh)}@${rot}`
     let img = cache.get(key)
     if (!img) {
-      const cv = makeOverlayCanvas(pw, ph, wmOpts, 2)
+      const cv = makeOverlayCanvas(vw, vh, wmOpts, 2)
       img = await doc.embedPng(await canvasToPngBytes(cv))
       cache.set(key, img)
     }
-    page.drawImage(img, { x: 0, y: 0, width: pw, height: ph })
+    // /Rotate 是显示时顺时针旋转; 预先逆时针旋转贴图抵消
+    const place = {
+      0: { x: 0, y: 0, rotate: degrees(0) },
+      90: { x: pw, y: 0, rotate: degrees(90) },
+      180: { x: pw, y: ph, rotate: degrees(180) },
+      270: { x: 0, y: ph, rotate: degrees(270) },
+    }[rot]
+    page.drawImage(img, { ...place, width: vw, height: vh })
     onProgress?.(++done)
     await new Promise((r) => setTimeout(r)) // 让出主线程刷新进度
   }
@@ -239,14 +252,15 @@ export async function pageToCanvas(pdf, pageIndex, scale) {
   return cv
 }
 
-export async function exportImages(pdf, range, dpi, format, quality, baseOut, onProgress) {
+export async function exportImages(pdf, range, dpi, format, quality, docPath, onProgress) {
   const scale = dpi / 72
   const outs = []
   let done = 0
   for (const i of [...range].sort((a, b) => a - b)) {
     const cv = await pageToCanvas(pdf, i, scale)
     const bytes = format === 'png' ? await canvasToPngBytes(cv) : await canvasToJpgBytes(cv, quality)
-    const path = baseOut.replace(/\.(png|jpg)$/, `_p${String(i + 1).padStart(3, '0')}.$1`)
+    // 每张图各自走防冲突命名, 重复导出不会覆盖之前的成果
+    const path = await outputPath(docPath, `_p${String(i + 1).padStart(3, '0')}`, format)
     await writeFile(path, bytes)
     outs.push(path)
     onProgress?.(++done)

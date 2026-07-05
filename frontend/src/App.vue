@@ -112,7 +112,10 @@ watch(tool, async () => {
   errorMsg.value = ''
   await nextTick()
   if (tool.value === 'pages') setupThumbObserver()
-  else reobserve()
+  else if (doc.value) {
+    // 文档可能是在「页面管理」下打开的, 此时滚动视图的观察器还没建过
+    observer ? reobserve() : setupObserver()
+  }
   refreshPreview()
 })
 
@@ -375,8 +378,7 @@ async function applyExport() {
     const d = doc.value
     const range = parseRange(exp.range, d.pageCount)
     busyStart('导出图片', range.size)
-    const base = await outputPath(d.path, '', exp.format)
-    const outs = await exportImages(d.pdf, range, exp.dpi, exp.format, 0.9, base, (n) => (busy.done = n))
+    const outs = await exportImages(d.pdf, range, exp.dpi, exp.format, 0.9, d.path, (n) => (busy.done = n))
     lastResult.value = { label: `已导出 ${outs.length} 张图片`, path: outs[0], extra: '' }
   })
 }
