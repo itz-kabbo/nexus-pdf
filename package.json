@@ -1,15 +1,15 @@
 {
   "name": "lightscroll",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "轻卷 LightScroll - 本地 PDF 工具箱。阅读、水印(图层/防删除)、加密解密、合并拆分、转图片、压缩。",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "author": "云中江树",
+  "license": "MIT",
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
   }
