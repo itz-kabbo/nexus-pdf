@@ -55,10 +55,13 @@ async function loadDoc(path) {
     renderedSet.clear()
     thumbRendered.clear()
     selected.value = new Set()
-    mergeList.value = [{ path, name: doc.value.name }]
+    if (!mergeList.value.some((x) => x.path === path)) {
+      mergeList.value.unshift({ path, name: doc.value.name })
+    }
     zoomFit()
     await nextTick()
-    setupObserver()
+    if (tool.value === 'pages') setupThumbObserver()
+    else setupObserver()
   } catch (e) {
     errorMsg.value = /password/i.test(String(e)) ? '这份 PDF 有密码保护，暂不支持加密文档' : '打开失败：' + (e.message || e)
   } finally {
@@ -404,7 +407,7 @@ onMounted(async () => {
       dragging.value = false
       const pdfs = event.payload.paths.filter((p) => p.toLowerCase().endsWith('.pdf'))
       if (!pdfs.length) return
-      if (tool.value === 'merge' && doc.value) {
+      if (tool.value === 'merge') {
         for (const p of pdfs) {
           if (!mergeList.value.some((x) => x.path === p)) {
             mergeList.value.push({ path: p, name: p.split(/[/\\]/).pop() })
@@ -434,6 +437,18 @@ onBeforeUnmount(() => {
 })
 
 const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
+
+// 未打开文档时, 各工具的空状态文案
+const emptyCopy = computed(() => {
+  const map = {
+    read: '拖入 PDF 文件，或点击打开',
+    watermark: '拖入要加水印的 PDF，或点击打开',
+    pages: '拖入 PDF，开始管理页面',
+    export: '拖入 PDF，导出为图片',
+    compress: '拖入要压缩的 PDF',
+  }
+  return map[tool.value] || map.read
+})
 </script>
 
 <template>
@@ -454,7 +469,6 @@ const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
           :key="n.id"
           class="nav-item"
           :class="{ active: tool === n.id }"
-          :disabled="!doc && n.id !== 'read'"
           @click="tool = n.id"
         >
           <span class="nav-icon" v-html="ICONS[n.id === 'read' ? 'read' : n.id === 'pages' ? 'pages' : n.id === 'merge' ? 'merge' : n.id === 'export' ? 'image' : n.id === 'compress' ? 'compress' : 'watermark']"></span>
@@ -470,11 +484,43 @@ const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
 
     <!-- 主区 -->
     <main class="content">
-      <!-- 空状态 -->
+      <div v-if="errorMsg" class="alert">{{ errorMsg }}</div>
+      <div v-if="lastResult" class="result-bar">
+        <span class="badge success">{{ lastResult.label }}</span>
+        <span class="result-name">{{ lastResult.path.split(/[/\\]/).pop() }}</span>
+        <span class="result-extra">{{ lastResult.extra }}</span>
+        <button class="btn ghost small" @click="revealFile(lastResult.path)">显示文件</button>
+      </div>
+
+      <!-- 未打开文档 -->
       <div v-if="!doc" class="empty">
-        <div class="dropzone" @click="pickAndOpen">
-          <span class="dropzone-icon" v-html="ICONS.read"></span>
-          <div class="dropzone-title">拖入 PDF 文件，或点击打开</div>
+        <!-- 合并不需要先开文档: 直接给独立工作区 -->
+        <div v-if="tool === 'merge'" class="merge-standalone">
+          <div class="panel-head">
+            <h2>合并 PDF</h2>
+            <p>把多个 PDF 按顺序合成一个文件，拖进窗口或点击添加</p>
+          </div>
+          <div class="merge-list" v-if="mergeList.length">
+            <div v-for="(m, i) in mergeList" :key="m.path" class="merge-item">
+              <span class="merge-idx">{{ i + 1 }}</span>
+              <span class="merge-name" :title="m.path">{{ m.name }}</span>
+              <button class="mini" @click="moveMerge(i, -1)">↑</button>
+              <button class="mini" @click="moveMerge(i, 1)">↓</button>
+              <button class="mini danger" @click="mergeList.splice(i, 1)">×</button>
+            </div>
+          </div>
+          <button class="btn ghost wide" @click="addMergeFiles">
+            <span class="btn-icon" v-html="ICONS.plus"></span>添加 PDF
+          </button>
+          <button class="btn primary wide" :disabled="mergeList.length < 2" @click="applyMerge">
+            合并 {{ mergeList.length }} 个文档
+          </button>
+        </div>
+
+        <!-- 其余工具: 带工具语境的打开引导 -->
+        <div v-else class="dropzone" @click="pickAndOpen">
+          <span class="dropzone-icon" v-html="ICONS[tool === 'read' ? 'read' : tool === 'pages' ? 'pages' : tool === 'export' ? 'image' : tool === 'compress' ? 'compress' : 'watermark']"></span>
+          <div class="dropzone-title">{{ emptyCopy }}</div>
           <div class="dropzone-hint">阅读 · 加水印(图层/防删除) · 页面管理 · 合并 · 转图片 · 压缩 — 全部本地完成</div>
         </div>
       </div>
@@ -502,14 +548,6 @@ const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
             </button>
           </div>
         </header>
-
-        <div v-if="errorMsg" class="alert">{{ errorMsg }}</div>
-        <div v-if="lastResult" class="result-bar">
-          <span class="badge success">{{ lastResult.label }}</span>
-          <span class="result-name">{{ lastResult.path.split(/[/\\]/).pop() }}</span>
-          <span class="result-extra">{{ lastResult.extra }}</span>
-          <button class="btn ghost small" @click="revealFile(lastResult.path)">显示文件</button>
-        </div>
 
         <div class="workspace">
           <!-- 阅读区 / 缩略图区 -->
@@ -832,6 +870,25 @@ const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
   flex: 1;
   display: flex;
   padding: 40px;
+  align-items: stretch;
+  justify-content: center;
+}
+.merge-standalone {
+  align-self: center;
+  width: min(460px, 100%);
+  background: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 24px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.merge-standalone .btn.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 .dropzone {
   flex: 1;
