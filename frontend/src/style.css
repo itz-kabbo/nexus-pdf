@@ -81,3 +81,51 @@ input:focus-visible {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(26, 34, 51, 0.24);
 }
+
+/* pdf.js 文字层：让 PDF 文字可选择、复制，同时保持画布作为视觉来源。 */
+.textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    line-height: 1;
+    text-align: initial;
+    transform-origin: 0 0;
+    -webkit-text-size-adjust: none;
+    text-size-adjust: none;
+    user-select: text;
+}
+
+.textLayer :is(span, br) {
+    position: absolute;
+    color: transparent;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0 0;
+    user-select: text;
+}
+
+.textLayer span.markedContent {
+    top: 0;
+    height: 0;
+}
+
+.textLayer span[role='img'] {
+    cursor: default;
+    user-select: none;
+}
+
+.textLayer ::selection {
+    background: rgba(22, 100, 255, 0.28);
+}
+
+.textLayer br::selection {
+    background: transparent;
+}
+
+.textLayer .endOfContent {
+    position: absolute;
+    display: block;
+    inset: 100% 0 0;
+    cursor: default;
+    user-select: none;
+}

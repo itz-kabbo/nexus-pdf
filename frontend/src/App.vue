@@ -1,8 +1,10 @@
 <script setup>
 import { ref, shallowRef, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readFile } from '@tauri-apps/plugin-fs'
+import { TextLayer } from 'pdfjs-dist'
 import {
   openPdf, openPdfBytes, parseRange, makeOverlayCanvas,
   watermarkLayer, watermarkRaster, extractPages, rotatePages, mergePdfs,
@@ -10,6 +12,10 @@ import {
   saveBytes, outputPath, fileSize, revealFile,
 } from './pdfops.js'
 import { ICONS } from './icons.js'
+import {
+  buildPageRows, buildTextMap, findMatchesInText, nextZoomStep,
+  rotatedSize, rowForPage, scaleForPage, segmentsForMatch,
+} from './reader.js'
 
 const NAV = [
   { id: 'read', name: '阅读', desc: '连续滚动浏览文档' },
@@ -49,6 +55,16 @@ async function loadDoc(path, password) {
       const vp = (await pdf.getPage(i)).getViewport({ scale: 1 })
       sizes.push({ w: vp.width, h: vp.height })
     }
+    const [pageLabels, viewerPrefs, outline] = await Promise.all([
+      pdf.getPageLabels().catch(() => null),
+      pdf.getViewerPreferences().catch(() => null),
+      pdf.getOutline().catch(() => null),
+    ])
+    const restored = restoreReaderState(path, viewerPrefs)
+    saveReaderState()
+    for (const task of renderTasks.values()) task.cancel?.()
+    renderTasks.clear()
+    doc.value?.pdf?.destroy()
     doc.value = {
       path,
       name: path.split(/[/\\]/).pop(),
@@ -56,19 +72,36 @@ async function loadDoc(path, password) {
       bytes, pdf,
       pageCount: pdf.numPages,
       sizes,
+      pageLabels,
       password: password || '',
     }
+    outlineItems.value = flattenOutline(outline || [])
+    currentPage.value = Math.min(pdf.numPages, Math.max(1, restored?.page || 1))
+    pageField.value = String(currentPage.value)
+    navHistory.value = [currentPage.value]
+    navHistoryIndex.value = 0
     renderVersion++
     renderedSet.clear()
     thumbRendered.clear()
+    readerThumbRendered.clear()
+    textCache.clear()
+    contentBoxCache.clear()
+    contentBoxTasks.clear()
+    clearSearch()
     selected.value = new Set()
     if (!mergeList.value.some((x) => x.path === path)) {
       mergeList.value.unshift({ path, name: doc.value.name })
     }
-    zoomFit()
     await nextTick()
-    if (tool.value === 'pages') setupThumbObserver()
-    else setupObserver()
+    if (tool.value !== 'read') zoomFit()
+    invalidateRendering()
+    if (tool.value === 'pages') {
+      setupThumbObserver()
+    } else {
+      setupObserver()
+      await navigateToPage(currentPage.value, { history: false, smooth: false })
+      if (tool.value === 'read' && readerSidebar.value === 'thumbs') setupReaderThumbObserver()
+    }
   } catch (e) {
     if (e?.name === 'PasswordException' || /password/i.test(String(e?.name || e))) {
       // 加密文档: 弹出密码输入, 输对后重新加载
@@ -90,61 +123,289 @@ function submitPassword() {
 }
 
 function closeDoc() {
+  saveReaderState()
+  for (const task of renderTasks.values()) task.cancel?.()
+  renderTasks.clear()
   doc.value?.pdf?.destroy()
   doc.value = null
   lastResult.value = null
+  outlineItems.value = []
+  clearSearch()
   observer?.disconnect()
+  readerThumbObserver?.disconnect()
 }
 
-// ---------- 阅读器渲染 (懒加载 + 缩放) ----------
+// ---------- Sumatra 风格阅读器 ----------
 const viewerEl = ref(null)
-const zoom = ref(1.2)
+const readerSidebarEl = ref(null)
+const findInputEl = ref(null)
+const pageInputEl = ref(null)
+const zoom = ref(1)
+const zoomMode = ref('fit-page') // fit-page | fit-width | fit-content | custom
+const pageLayout = ref('single') // single | facing | book
+const readerContinuous = ref(true)
+const rotation = ref(0)
 const currentPage = ref(1)
+const pageField = ref('1')
+const readerSidebar = ref('none') // none | outline | thumbs
+const outlineItems = ref([])
+const inverted = ref(false)
+const fullscreen = ref(false)
+const presentation = ref(false)
+const navHistory = ref([1])
+const navHistoryIndex = ref(0)
+const contentBoxRevision = ref(0)
+const findState = reactive({
+  open: false,
+  query: '',
+  results: [],
+  active: -1,
+  searching: false,
+  pagesDone: 0,
+})
+
 let observer = null
 let renderVersion = 0
+let zoomTimer = null
+let searchTimer = null
+let searchToken = 0
+let saveStateTimer = null
 const renderedSet = new Set() // `${index}@${version}`
+const renderedTextLayers = new Map()
+const renderTasks = new Map()
 const thumbRendered = new Set()
+const textCache = new Map()
+const contentBoxCache = new Map()
+const contentBoxTasks = new Map()
+
+const allReaderRows = computed(() => buildPageRows(doc.value?.pageCount || 0, tool.value === 'read' ? pageLayout.value : 'single'))
+const readerRows = computed(() => {
+  if (tool.value !== 'read' || readerContinuous.value) return allReaderRows.value
+  return [rowForPage(allReaderRows.value, currentPage.value - 1)]
+})
+const zoomPercent = computed(() => Math.round(pageScale(currentPage.value - 1) * 100))
+const zoomLabel = computed(() => ({
+  'fit-page': '适合页',
+  'fit-width': '适合宽度',
+  'fit-content': '适合内容',
+  custom: `${zoomPercent.value}%`,
+}[zoomMode.value]))
+const canNavigateBack = computed(() => navHistoryIndex.value > 0)
+const canNavigateForward = computed(() => navHistoryIndex.value < navHistory.value.length - 1)
+const currentPageLabel = computed(() => doc.value?.pageLabels?.[currentPage.value - 1] || String(currentPage.value))
+
+function flattenOutline(items, level = 0, output = []) {
+  for (const item of items) {
+    output.push({
+      title: item.title || '未命名章节',
+      dest: item.dest,
+      url: item.url,
+      level,
+      bold: !!item.bold,
+      italic: !!item.italic,
+    })
+    if (item.items?.length) flattenOutline(item.items, level + 1, output)
+  }
+  return output
+}
+
+function restoreReaderState(path, viewerPrefs) {
+  pageLayout.value = 'single'
+  readerContinuous.value = true
+  zoomMode.value = 'fit-page'
+  zoom.value = 1
+  rotation.value = 0
+  readerSidebar.value = 'none'
+  inverted.value = false
+
+  const preferred = viewerPrefs?.PageLayout
+  if (preferred === 'SinglePage') readerContinuous.value = false
+  if (preferred === 'TwoColumnLeft' || preferred === 'TwoColumnRight') pageLayout.value = 'facing'
+  if (preferred === 'TwoPageLeft' || preferred === 'TwoPageRight') {
+    pageLayout.value = 'book'
+    readerContinuous.value = false
+  }
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(`lightscroll:reader:${path}`) || 'null')
+    if (!saved) return null
+    if (['single', 'facing', 'book'].includes(saved.layout)) pageLayout.value = saved.layout
+    if (typeof saved.continuous === 'boolean') readerContinuous.value = saved.continuous
+    if (['fit-page', 'fit-width', 'fit-content', 'custom'].includes(saved.zoomMode)) zoomMode.value = saved.zoomMode
+    if (Number.isFinite(saved.zoom)) zoom.value = saved.zoom
+    if ([0, 90, 180, 270].includes(saved.rotation)) rotation.value = saved.rotation
+    if (['none', 'outline', 'thumbs'].includes(saved.sidebar)) readerSidebar.value = saved.sidebar
+    inverted.value = !!saved.inverted
+    return saved
+  } catch {
+    return null
+  }
+}
+
+function saveReaderState() {
+  clearTimeout(saveStateTimer)
+  const d = doc.value
+  if (!d) return
+  try {
+    localStorage.setItem(`lightscroll:reader:${d.path}`, JSON.stringify({
+      page: currentPage.value,
+      layout: pageLayout.value,
+      continuous: readerContinuous.value,
+      zoomMode: zoomMode.value,
+      zoom: zoom.value,
+      rotation: rotation.value,
+      sidebar: readerSidebar.value,
+      inverted: inverted.value,
+    }))
+  } catch {
+    // localStorage 不可用不影响阅读
+  }
+}
+
+function scheduleSaveReaderState() {
+  clearTimeout(saveStateTimer)
+  saveStateTimer = setTimeout(saveReaderState, 250)
+}
+
+function pageScale(index) {
+  if (!doc.value) return zoom.value
+  if (tool.value !== 'read') return zoom.value
+  // 让 Map 的更新能触发模板重新计算尺寸。
+  void contentBoxRevision.value
+  return scaleForPage({
+    sizes: doc.value.sizes,
+    pageIndex: Math.max(0, index),
+    layout: pageLayout.value,
+    zoomMode: zoomMode.value,
+    customZoom: zoom.value,
+    rotation: rotation.value,
+    viewportWidth: viewerEl.value?.clientWidth || 900,
+    viewportHeight: viewerEl.value?.clientHeight || 700,
+    contentBoxes: contentBoxCache,
+  })
+}
+
+function pageStyle(size, index) {
+  const rotated = rotatedSize(size, tool.value === 'read' ? rotation.value : 0)
+  const scale = pageScale(index)
+  return { width: `${rotated.w * scale}px`, height: `${rotated.h * scale}px` }
+}
+
+function invalidateRendering(delay = 0) {
+  clearTimeout(zoomTimer)
+  zoomTimer = setTimeout(async () => {
+    for (const task of renderTasks.values()) task.cancel?.()
+    renderTasks.clear()
+    renderVersion++
+    renderedSet.clear()
+    renderedTextLayers.clear()
+    await nextTick()
+    if (doc.value && tool.value !== 'pages') {
+      if (observer) reobserve()
+      else setupObserver()
+      viewerEl.value?.querySelectorAll('[data-page]').forEach((el) => {
+        const rect = el.getBoundingClientRect()
+        const rootRect = viewerEl.value.getBoundingClientRect()
+        if (rect.bottom >= rootRect.top - 600 && rect.top <= rootRect.bottom + 600) {
+          renderPage(+el.dataset.page)
+        }
+      })
+    }
+  }, delay)
+}
+
+async function setZoomMode(mode) {
+  zoomMode.value = mode
+  if (mode === 'fit-content' && doc.value) {
+    const row = rowForPage(allReaderRows.value, currentPage.value - 1)
+    await Promise.all(row.map((index) => detectContentBox(index)))
+  }
+}
 
 function zoomFit() {
+  if (tool.value === 'read') {
+    setZoomMode('fit-width')
+    return
+  }
   if (!doc.value || !viewerEl.value) {
     zoom.value = 1.2
     return
   }
-  const maxW = Math.max(...doc.value.sizes.map((s) => s.w))
-  zoom.value = Math.max(0.3, (viewerEl.value.clientWidth - 72) / maxW)
+  const maxWidth = Math.max(...doc.value.sizes.map((size) => size.w))
+  zoom.value = Math.max(0.3, (viewerEl.value.clientWidth - 72) / maxWidth)
 }
 
-function zoomBy(f) {
-  zoom.value = Math.min(4, Math.max(0.3, zoom.value * f))
+function zoomBy(direction, anchorEvent) {
+  const current = pageScale(currentPage.value - 1)
+  const next = nextZoomStep(current, direction)
+  setCustomZoom(next, anchorEvent)
 }
 
-let zoomTimer = null
-watch(zoom, () => {
-  clearTimeout(zoomTimer)
-  zoomTimer = setTimeout(() => {
-    renderVersion++
-    renderedSet.clear()
-    reobserve()
-  }, 220)
+async function setCustomZoom(next, anchorEvent) {
+  const root = viewerEl.value
+  const oldScale = pageScale(currentPage.value - 1)
+  let anchor = null
+  if (root && anchorEvent) {
+    const rect = root.getBoundingClientRect()
+    anchor = {
+      x: anchorEvent.clientX - rect.left + root.scrollLeft,
+      y: anchorEvent.clientY - rect.top + root.scrollTop,
+      clientX: anchorEvent.clientX - rect.left,
+      clientY: anchorEvent.clientY - rect.top,
+    }
+  }
+  zoom.value = next
+  zoomMode.value = 'custom'
+  await nextTick()
+  if (root && anchor) {
+    const ratio = next / Math.max(0.001, oldScale)
+    root.scrollLeft = anchor.x * ratio - anchor.clientX
+    root.scrollTop = anchor.y * ratio - anchor.clientY
+  }
+}
+
+watch([zoom, zoomMode, pageLayout, readerContinuous, rotation], () => {
+  invalidateRendering(90)
+  scheduleSaveReaderState()
+})
+
+watch(currentPage, async (page) => {
+  pageField.value = String(page)
+  scheduleSaveReaderState()
+  if (doc.value && tool.value === 'read' && !readerContinuous.value) {
+    await nextTick()
+    invalidateRendering()
+  }
+})
+
+watch(readerSidebar, async (value) => {
+  scheduleSaveReaderState()
+  await nextTick()
+  if (value === 'thumbs') setupReaderThumbObserver()
+  if (doc.value && tool.value === 'read' && zoomMode.value !== 'custom') invalidateRendering(40)
 })
 
 watch(tool, async () => {
   errorMsg.value = ''
   await nextTick()
-  if (tool.value === 'pages') setupThumbObserver()
-  else if (doc.value) {
-    // 文档可能是在「页面管理」下打开的, 此时滚动视图的观察器还没建过
+  if (tool.value === 'pages') {
+    setupThumbObserver()
+  } else if (doc.value) {
+    if (tool.value !== 'read') zoomFit()
+    invalidateRendering()
     observer ? reobserve() : setupObserver()
+    if (tool.value === 'read' && readerSidebar.value === 'thumbs') setupReaderThumbObserver()
   }
   refreshPreview()
 })
 
 function setupObserver() {
   observer?.disconnect()
+  if (!viewerEl.value) return
   observer = new IntersectionObserver(
     (entries) => {
-      for (const en of entries) {
-        if (en.isIntersecting) renderPage(+en.target.dataset.page)
+      for (const entry of entries) {
+        if (entry.isIntersecting) renderPage(+entry.target.dataset.page)
       }
       trackCurrentPage()
     },
@@ -159,40 +420,736 @@ function reobserve() {
   viewerEl.value.querySelectorAll('[data-page]').forEach((el) => observer.observe(el))
 }
 
-async function renderPage(i) {
+async function getPageText(index, page) {
+  const cached = textCache.get(index)
+  if (cached) {
+    textCache.delete(index)
+    textCache.set(index, cached)
+    return await cached
+  }
+  const task = page.getTextContent({ includeMarkedContent: true, disableNormalization: true })
+    .then((content) => ({ content, ...buildTextMap(content.items) }))
+  textCache.set(index, task)
+  while (textCache.size > 36) textCache.delete(textCache.keys().next().value)
+  return await task
+}
+
+async function renderPage(index) {
   const d = doc.value
   if (!d) return
-  const key = `${i}@${renderVersion}`
+  const key = `${index}@${renderVersion}`
   if (renderedSet.has(key)) return
   renderedSet.add(key)
-  const ver = renderVersion
+  const version = renderVersion
   try {
-    const page = await d.pdf.getPage(i + 1)
-    if (ver !== renderVersion) return
+    if (tool.value === 'read' && zoomMode.value === 'fit-content') {
+      await detectContentBox(index)
+    }
+    const page = await d.pdf.getPage(index + 1)
+    if (version !== renderVersion) return
+    const scale = pageScale(index)
+    const totalRotation = page.rotate + (tool.value === 'read' ? rotation.value : 0)
+    const cssViewport = page.getViewport({ scale, rotation: totalRotation })
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    const vp = page.getViewport({ scale: zoom.value * dpr })
-    const cv = viewerEl.value?.querySelector(`canvas[data-cv="${i}"]`)
-    if (!cv) return
-    cv.width = Math.round(vp.width)
-    cv.height = Math.round(vp.height)
-    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise
-    cv.dataset.ok = '1'
-  } catch {
+    const renderViewport = page.getViewport({ scale: scale * dpr, rotation: totalRotation })
+    const canvas = viewerEl.value?.querySelector(`canvas[data-cv="${index}"]`)
+    if (!canvas) return
+    canvas.width = Math.round(renderViewport.width)
+    canvas.height = Math.round(renderViewport.height)
+    renderTasks.get(index)?.cancel?.()
+    const renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport })
+    renderTasks.set(index, renderTask)
+    try {
+      await renderTask.promise
+    } finally {
+      if (renderTasks.get(index) === renderTask) renderTasks.delete(index)
+    }
+    if (version !== renderVersion) return
+    canvas.dataset.ok = '1'
+    if (tool.value === 'read') await renderReaderLayers(page, index, cssViewport, version)
+  } catch (error) {
     renderedSet.delete(key)
+    if (version === renderVersion && error?.name === 'RenderingCancelledException') {
+      setTimeout(() => renderPage(index), 40)
+    }
   }
+}
+
+async function renderReaderLayers(page, index, viewport, version) {
+  const pageEl = viewerEl.value?.querySelector(`.page[data-page="${index}"]`)
+  const textEl = pageEl?.querySelector(`[data-text-layer="${index}"]`)
+  const annotationEl = pageEl?.querySelector(`[data-annotation-layer="${index}"]`)
+  if (!pageEl || !textEl || !annotationEl) return
+  textEl.replaceChildren()
+  annotationEl.replaceChildren()
+  textEl.style.setProperty('--scale-factor', viewport.scale)
+
+  const map = await getPageText(index, page)
+  if (version !== renderVersion || !textEl.isConnected) return
+  const textLayer = new TextLayer({
+    textContentSource: map.content,
+    container: textEl,
+    viewport,
+  })
+  await textLayer.render()
+  if (version !== renderVersion || !textEl.isConnected) return
+  const end = document.createElement('div')
+  end.className = 'endOfContent'
+  textEl.append(end)
+  renderedTextLayers.set(index, { pageEl, textDivs: textLayer.textDivs, map, version })
+  renderSearchHighlightsForPage(index)
+  await renderAnnotationLinks(page, index, viewport, annotationEl, version)
+}
+
+async function renderAnnotationLinks(page, index, viewport, layer, version) {
+  const annotations = await page.getAnnotations({ intent: 'display' })
+  if (version !== renderVersion || !layer.isConnected) return
+  for (const annotation of annotations) {
+    if (annotation.subtype !== 'Link' || !annotation.rect) continue
+    const rect = viewport.convertToViewportRectangle(annotation.rect)
+    const left = Math.min(rect[0], rect[2])
+    const top = Math.min(rect[1], rect[3])
+    const width = Math.abs(rect[2] - rect[0])
+    const height = Math.abs(rect[3] - rect[1])
+    const link = annotation.url ? document.createElement('a') : document.createElement('button')
+    link.className = 'pdf-link'
+    Object.assign(link.style, {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    })
+    link.title = annotation.title || annotation.url || '跳转到文档内位置'
+    if (annotation.url) {
+      link.href = annotation.url
+      link.target = '_blank'
+      link.rel = 'noreferrer'
+    } else {
+      link.type = 'button'
+      link.addEventListener('click', () => {
+        if (annotation.dest) goToDestination(annotation.dest)
+        else if (annotation.action === 'NextPage') navigateRelative(1)
+        else if (annotation.action === 'PrevPage') navigateRelative(-1)
+        else if (annotation.action === 'FirstPage') navigateToPage(1)
+        else if (annotation.action === 'LastPage') navigateToPage(doc.value.pageCount)
+      })
+    }
+    layer.append(link)
+  }
+}
+
+async function detectContentBox(index) {
+  if (!doc.value || contentBoxCache.has(index)) return
+  if (contentBoxTasks.has(index)) return await contentBoxTasks.get(index)
+  const sourcePdf = doc.value.pdf
+  const sourceRotation = rotation.value
+  const task = (async () => {
+    try {
+      const page = await sourcePdf.getPage(index + 1)
+      const base = page.getViewport({ scale: 1, rotation: page.rotate + sourceRotation })
+      const scale = Math.min(0.6, 520 / Math.max(base.width, base.height))
+      const viewport = page.getViewport({ scale, rotation: page.rotate + sourceRotation })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(viewport.width))
+      canvas.height = Math.max(1, Math.round(viewport.height))
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      await page.render({ canvasContext: ctx, viewport }).promise
+      const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      let minX = width, minY = height, maxX = 0, maxY = 0
+      const step = width * height > 300000 ? 2 : 1
+      for (let y = 0; y < height; y += step) {
+        for (let x = 0; x < width; x += step) {
+          const p = (y * width + x) * 4
+          if (data[p] < 238 || data[p + 1] < 238 || data[p + 2] < 238) {
+            minX = Math.min(minX, x)
+            minY = Math.min(minY, y)
+            maxX = Math.max(maxX, x)
+            maxY = Math.max(maxY, y)
+          }
+        }
+      }
+      if (maxX > minX && maxY > minY) {
+        const padX = width * 0.025
+        const padY = height * 0.025
+        if (doc.value?.pdf === sourcePdf && rotation.value === sourceRotation) contentBoxCache.set(index, {
+          width: Math.min(1, (maxX - minX + padX * 2) / width),
+          height: Math.min(1, (maxY - minY + padY * 2) / height),
+        })
+      }
+    } catch {
+      // 扫描失败时使用保守的 6% 页边距估计。
+    } finally {
+      contentBoxTasks.delete(index)
+      contentBoxRevision.value++
+    }
+  })()
+  contentBoxTasks.set(index, task)
+  await task
+}
+
+function pushNavigationPoint(page) {
+  if (navHistory.value[navHistoryIndex.value] === page) return
+  navHistory.value = [...navHistory.value.slice(0, navHistoryIndex.value + 1), page]
+  navHistoryIndex.value = navHistory.value.length - 1
+}
+
+async function navigateToPage(page, { history = true, smooth = true } = {}) {
+  if (!doc.value) return
+  const target = Math.min(doc.value.pageCount, Math.max(1, Math.round(Number(page) || 1)))
+  if (history) pushNavigationPoint(target)
+  currentPage.value = target
+  pageField.value = String(target)
+  await nextTick()
+  if (tool.value === 'read' && !readerContinuous.value) {
+    viewerEl.value?.scrollTo({ top: 0, left: 0 })
+    await nextTick()
+    setupObserver()
+    renderPage(target - 1)
+    return
+  }
+  const pageEl = viewerEl.value?.querySelector(`.page[data-page="${target - 1}"]`)
+  pageEl?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start', inline: 'nearest' })
+}
+
+function submitPageField() {
+  const value = pageField.value.trim()
+  const labelIndex = doc.value?.pageLabels?.findIndex((label) => label === value) ?? -1
+  navigateToPage(labelIndex >= 0 ? labelIndex + 1 : Number(value))
+  pageInputEl.value?.select()
+}
+
+function navigateRelative(delta) {
+  if (!doc.value) return
+  const rows = allReaderRows.value
+  if (tool.value === 'read' && !readerContinuous.value) {
+    const currentRow = Math.max(0, rows.findIndex((row) => row.includes(currentPage.value - 1)))
+    const targetRow = rows[Math.min(rows.length - 1, Math.max(0, currentRow + Math.sign(delta)))]
+    navigateToPage((targetRow?.[0] ?? 0) + 1, { history: false })
+    return
+  }
+  navigateToPage(currentPage.value + delta, { history: false })
+}
+
+function navigateHistory(delta) {
+  const next = navHistoryIndex.value + delta
+  if (next < 0 || next >= navHistory.value.length) return
+  navHistoryIndex.value = next
+  navigateToPage(navHistory.value[next], { history: false })
+}
+
+async function goToDestination(dest) {
+  if (!doc.value || !dest) return
+  try {
+    const explicit = typeof dest === 'string' ? await doc.value.pdf.getDestination(dest) : dest
+    if (!explicit?.length) return
+    const ref = explicit[0]
+    const index = typeof ref === 'object' ? await doc.value.pdf.getPageIndex(ref) : Number(ref)
+    await navigateToPage(index + 1)
+  } catch {
+    // 损坏的内部链接不应中断阅读
+  }
+}
+
+function activateOutline(item) {
+  if (item.url) window.open(item.url, '_blank', 'noopener')
+  else goToDestination(item.dest)
 }
 
 function trackCurrentPage() {
   const root = viewerEl.value
-  if (!root || !doc.value) return
-  const mid = root.scrollTop + root.clientHeight / 3
-  let acc = 0
-  for (let i = 0; i < doc.value.sizes.length; i++) {
-    acc += doc.value.sizes[i].h * zoom.value + 14
-    if (acc > mid) {
-      currentPage.value = i + 1
-      return
+  if (!root || !doc.value || (tool.value === 'read' && !readerContinuous.value)) return
+  const rootRect = root.getBoundingClientRect()
+  let bestPage = currentPage.value
+  let bestScore = -Infinity
+  let currentScore = -Infinity
+  root.querySelectorAll('.page[data-page]').forEach((el) => {
+    const rect = el.getBoundingClientRect()
+    const visibleHeight = Math.max(0, Math.min(rect.bottom, rootRect.bottom) - Math.max(rect.top, rootRect.top))
+    const visibleWidth = Math.max(0, Math.min(rect.right, rootRect.right) - Math.max(rect.left, rootRect.left))
+    const visibleArea = visibleHeight * visibleWidth
+    const distance = Math.abs(rect.top - rootRect.top - 18)
+    const score = visibleArea - distance * 8
+    const page = +el.dataset.page + 1
+    if (page === currentPage.value) currentScore = score
+    if (score > bestScore || (score === bestScore && page < bestPage)) {
+      bestScore = score
+      bestPage = page
     }
+  })
+  // 对开/书籍模式中，同一行两页可见度相同；保留显式跳转到的那一页。
+  if (currentScore > 0 && currentScore >= bestScore - 1) bestPage = currentPage.value
+  if (bestScore > -Infinity && bestPage !== currentPage.value) currentPage.value = bestPage
+}
+
+// ---------- 目录、阅读缩略图、全文搜索 ----------
+let readerThumbObserver = null
+const readerThumbRendered = new Set()
+
+function setupReaderThumbObserver() {
+  readerThumbObserver?.disconnect()
+  if (!readerSidebarEl.value) return
+  readerThumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) renderReaderThumb(+entry.target.dataset.readerThumb)
+      }
+    },
+    { root: readerSidebarEl.value, rootMargin: '300px 0px' }
+  )
+  readerSidebarEl.value.querySelectorAll('[data-reader-thumb]').forEach((el) => readerThumbObserver.observe(el))
+}
+
+async function renderReaderThumb(index) {
+  if (readerThumbRendered.has(index) || !doc.value) return
+  readerThumbRendered.add(index)
+  try {
+    const page = await doc.value.pdf.getPage(index + 1)
+    const base = page.getViewport({ scale: 1, rotation: page.rotate + rotation.value })
+    const scale = (132 * Math.min(window.devicePixelRatio || 1, 2)) / base.width
+    const viewport = page.getViewport({ scale, rotation: page.rotate + rotation.value })
+    const canvas = readerSidebarEl.value?.querySelector(`canvas[data-reader-thumb-canvas="${index}"]`)
+    if (!canvas) return
+    canvas.width = Math.round(viewport.width)
+    canvas.height = Math.round(viewport.height)
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise
+  } catch {
+    readerThumbRendered.delete(index)
+  }
+}
+
+watch(rotation, async () => {
+  contentBoxCache.clear()
+  contentBoxTasks.clear()
+  contentBoxRevision.value++
+  readerThumbRendered.clear()
+  await nextTick()
+  if (readerSidebar.value === 'thumbs') setupReaderThumbObserver()
+})
+
+const findCounter = computed(() => {
+  if (findState.searching) return `${findState.pagesDone} / ${doc.value?.pageCount || 0} 页`
+  if (!findState.query.trim()) return ''
+  if (!findState.results.length) return '无结果'
+  return `${findState.active + 1} / ${findState.results.length}`
+})
+
+function openFind() {
+  if (!doc.value || tool.value !== 'read') return
+  findState.open = true
+  nextTick(() => {
+    refreshSearchHighlights()
+    findInputEl.value?.focus()
+    findInputEl.value?.select()
+  })
+}
+
+function clearSearch() {
+  searchToken++
+  clearTimeout(searchTimer)
+  findState.open = false
+  findState.query = ''
+  findState.results = []
+  findState.active = -1
+  findState.searching = false
+  findState.pagesDone = 0
+  refreshSearchHighlights()
+}
+
+function closeFind() {
+  findState.open = false
+  findInputEl.value?.blur()
+  refreshSearchHighlights()
+}
+
+watch(() => findState.query, (query) => {
+  clearTimeout(searchTimer)
+  if (!query.trim()) {
+    searchToken++
+    findState.results = []
+    findState.active = -1
+    findState.searching = false
+    refreshSearchHighlights()
+    return
+  }
+  searchTimer = setTimeout(runSearch, query.trim().length <= 2 ? 500 : 260)
+})
+
+async function runSearch() {
+  const d = doc.value
+  const query = findState.query.trim()
+  if (!d || !query) return
+  const token = ++searchToken
+  findState.results = []
+  findState.active = -1
+  findState.searching = true
+  findState.pagesDone = 0
+  refreshSearchHighlights()
+
+  for (let index = 0; index < d.pageCount; index++) {
+    if (token !== searchToken) return
+    try {
+      const page = await d.pdf.getPage(index + 1)
+      const map = await getPageText(index, page)
+      const matches = findMatchesInText(map.text, query)
+      for (const match of matches) findState.results.push({ page: index, ...match })
+    } catch {
+      // 某一页无法提取文字时继续搜索其余页面
+    }
+    findState.pagesDone = index + 1
+    if (index % 4 === 3) await new Promise((resolve) => setTimeout(resolve))
+  }
+
+  if (token !== searchToken) return
+  findState.searching = false
+  findState.active = findState.results.length ? 0 : -1
+  refreshSearchHighlights()
+  if (findState.active >= 0) showSearchResult(findState.active)
+}
+
+function findNext(direction = 1) {
+  if (!findState.results.length) {
+    if (findState.query.trim()) runSearch()
+    return
+  }
+  const count = findState.results.length
+  findState.active = (findState.active + direction + count) % count
+  refreshSearchHighlights()
+  showSearchResult(findState.active)
+}
+
+async function showSearchResult(resultIndex) {
+  const result = findState.results[resultIndex]
+  if (!result) return
+  await navigateToPage(result.page + 1, { history: false, smooth: false })
+  renderPage(result.page)
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    refreshSearchHighlights()
+    const highlight = viewerEl.value?.querySelector(`.search-highlight[data-result="${resultIndex}"]`)
+    if (highlight) {
+      highlight.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+      break
+    }
+  }
+}
+
+function refreshSearchHighlights() {
+  for (const index of renderedTextLayers.keys()) renderSearchHighlightsForPage(index)
+}
+
+function renderSearchHighlightsForPage(pageIndex) {
+  const rendered = renderedTextLayers.get(pageIndex)
+  if (!rendered || rendered.version !== renderVersion) return
+  const layer = rendered.pageEl.querySelector(`[data-search-layer="${pageIndex}"]`)
+  if (!layer) return
+  layer.replaceChildren()
+  if (!findState.open || !findState.query.trim() || !findState.results.length) return
+  const pageRect = rendered.pageEl.getBoundingClientRect()
+
+  findState.results.forEach((match, resultIndex) => {
+    if (match.page !== pageIndex) return
+    for (const segment of segmentsForMatch(rendered.map.segments, match)) {
+      const div = rendered.textDivs[segment.itemIndex]
+      const node = div?.firstChild
+      if (!node || node.nodeType !== Node.TEXT_NODE) continue
+      const range = document.createRange()
+      range.setStart(node, Math.min(segment.start, node.textContent.length))
+      range.setEnd(node, Math.min(segment.end, node.textContent.length))
+      for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height) continue
+        const mark = document.createElement('div')
+        mark.className = `search-highlight${resultIndex === findState.active ? ' active' : ''}`
+        mark.dataset.result = String(resultIndex)
+        Object.assign(mark.style, {
+          left: `${rect.left - pageRect.left}px`,
+          top: `${rect.top - pageRect.top}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+        })
+        layer.append(mark)
+      }
+    }
+  })
+}
+
+// ---------- 键盘、滚轮、右键拖拽与全屏 ----------
+const panState = reactive({ active: false, moved: false, x: 0, y: 0, left: 0, top: 0, pointerId: -1 })
+let presentationRestore = null
+
+function onViewerWheel(event) {
+  if (tool.value !== 'read' || !(event.ctrlKey || event.metaKey)) return
+  event.preventDefault()
+  zoomBy(event.deltaY < 0 ? 1 : -1, event)
+}
+
+function startPan(event) {
+  if (tool.value !== 'read' || event.button !== 2 || !viewerEl.value) return
+  panState.active = true
+  panState.moved = false
+  panState.x = event.clientX
+  panState.y = event.clientY
+  panState.left = viewerEl.value.scrollLeft
+  panState.top = viewerEl.value.scrollTop
+  panState.pointerId = event.pointerId
+  viewerEl.value.setPointerCapture?.(event.pointerId)
+}
+
+function movePan(event) {
+  if (!panState.active || event.pointerId !== panState.pointerId || !viewerEl.value) return
+  const dx = event.clientX - panState.x
+  const dy = event.clientY - panState.y
+  if (Math.abs(dx) + Math.abs(dy) > 3) panState.moved = true
+  viewerEl.value.scrollLeft = panState.left - dx
+  viewerEl.value.scrollTop = panState.top - dy
+}
+
+function endPan(event) {
+  if (event.pointerId !== panState.pointerId) return
+  panState.active = false
+  viewerEl.value?.releasePointerCapture?.(event.pointerId)
+  panState.pointerId = -1
+}
+
+function onViewerContextMenu(event) {
+  if (tool.value === 'read') event.preventDefault()
+}
+
+async function toggleFullscreen(force) {
+  const enter = force ?? !fullscreen.value
+  try {
+    if ('__TAURI_INTERNALS__' in window) {
+      await getCurrentWindow().setFullscreen(enter)
+    } else if (enter && !document.fullscreenElement) {
+      await document.documentElement.requestFullscreen()
+    } else if (!enter && document.fullscreenElement) {
+      await document.exitFullscreen()
+    }
+    fullscreen.value = enter
+  } catch {
+    // WKWebView 不允许原生全屏时仍使用无边框阅读布局。
+    fullscreen.value = enter
+  }
+}
+
+async function togglePresentation() {
+  if (!presentation.value) {
+    presentationRestore = {
+      layout: pageLayout.value,
+      continuous: readerContinuous.value,
+      zoomMode: zoomMode.value,
+      zoom: zoom.value,
+    }
+    presentation.value = true
+    pageLayout.value = 'single'
+    readerContinuous.value = false
+    zoomMode.value = 'fit-page'
+    await toggleFullscreen(true)
+  } else {
+    presentation.value = false
+    if (presentationRestore) {
+      pageLayout.value = presentationRestore.layout
+      readerContinuous.value = presentationRestore.continuous
+      zoomMode.value = presentationRestore.zoomMode
+      zoom.value = presentationRestore.zoom
+    }
+    await toggleFullscreen(false)
+  }
+}
+
+function cycleZoomMode() {
+  const modes = ['fit-page', 'fit-width', 'fit-content']
+  const index = modes.indexOf(zoomMode.value)
+  setZoomMode(modes[(index + 1 + modes.length) % modes.length])
+}
+
+function handleKeydown(event) {
+  if (!doc.value || tool.value !== 'read') return
+  const target = event.target
+  const inField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable
+  const mod = event.metaKey || event.ctrlKey
+  const key = event.key
+  const lower = key.toLowerCase()
+
+  if (key === 'Escape') {
+    if (findState.open) {
+      closeFind()
+      event.preventDefault()
+    } else if (presentation.value) {
+      togglePresentation()
+      event.preventDefault()
+    }
+    return
+  }
+  if (inField) {
+    if (key === 'F3') {
+      findNext(event.shiftKey ? -1 : 1)
+      event.preventDefault()
+    }
+    return
+  }
+
+  if (mod && lower === 'o') {
+    pickAndOpen()
+    event.preventDefault()
+    return
+  }
+  if (mod && lower === 'w') {
+    closeDoc()
+    event.preventDefault()
+    return
+  }
+  if (mod && lower === 'f') {
+    openFind()
+    event.preventDefault()
+    return
+  }
+  if (mod && lower === 'g') {
+    pageInputEl.value?.focus()
+    pageInputEl.value?.select()
+    event.preventDefault()
+    return
+  }
+  if (mod && ['0', '1', '2', '3', '6', '7', '8'].includes(key)) {
+    if (key === '0') setZoomMode('fit-page')
+    if (key === '1') setCustomZoom(1)
+    if (key === '2') setZoomMode('fit-width')
+    if (key === '3') setZoomMode('fit-content')
+    if (key === '6') pageLayout.value = 'single'
+    if (key === '7') pageLayout.value = 'facing'
+    if (key === '8') pageLayout.value = 'book'
+    event.preventDefault()
+    return
+  }
+  if (event.altKey && key === 'ArrowLeft') {
+    navigateHistory(-1)
+    event.preventDefault()
+    return
+  }
+  if (event.altKey && key === 'ArrowRight') {
+    navigateHistory(1)
+    event.preventDefault()
+    return
+  }
+  if (key === 'F12') {
+    readerSidebar.value = readerSidebar.value === 'outline' ? 'none' : 'outline'
+    event.preventDefault()
+    return
+  }
+  if (key === 'F3') {
+    findNext(event.shiftKey ? -1 : 1)
+    event.preventDefault()
+    return
+  }
+  if (key === 'F11') {
+    toggleFullscreen()
+    event.preventDefault()
+    return
+  }
+  if (key === 'F5') {
+    togglePresentation()
+    event.preventDefault()
+    return
+  }
+  if (key === '/' && !event.shiftKey) {
+    openFind()
+    event.preventDefault()
+    return
+  }
+  if (lower === 'g') {
+    pageInputEl.value?.focus()
+    pageInputEl.value?.select()
+    event.preventDefault()
+    return
+  }
+  if (key === '+' || key === '=') {
+    zoomBy(1)
+    event.preventDefault()
+    return
+  }
+  if (key === '-') {
+    zoomBy(-1)
+    event.preventDefault()
+    return
+  }
+  if (lower === 'z') {
+    cycleZoomMode()
+    event.preventDefault()
+    return
+  }
+  if (lower === 'c') {
+    readerContinuous.value = !readerContinuous.value
+    event.preventDefault()
+    return
+  }
+  if (key === '[') {
+    rotation.value = (rotation.value + 270) % 360
+    event.preventDefault()
+    return
+  }
+  if (key === ']') {
+    rotation.value = (rotation.value + 90) % 360
+    event.preventDefault()
+    return
+  }
+  if (event.shiftKey && lower === 'i') {
+    inverted.value = !inverted.value
+    event.preventDefault()
+    return
+  }
+  if (lower === 'f') {
+    toggleFullscreen()
+    event.preventDefault()
+    return
+  }
+  if (key === 'Home') {
+    navigateToPage(1, { history: false })
+    event.preventDefault()
+    return
+  }
+  if (key === 'End') {
+    navigateToPage(doc.value.pageCount, { history: false })
+    event.preventDefault()
+    return
+  }
+  if (key === ' ' || key === 'PageDown' || key === 'PageUp') {
+    const direction = key === 'PageUp' || event.shiftKey ? -1 : 1
+    if (readerContinuous.value) viewerEl.value?.scrollBy({ top: direction * viewerEl.value.clientHeight * 0.88, behavior: 'smooth' })
+    else navigateRelative(direction)
+    event.preventDefault()
+    return
+  }
+  if (lower === 'n') {
+    navigateRelative(1)
+    event.preventDefault()
+    return
+  }
+  if (lower === 'p') {
+    navigateRelative(-1)
+    event.preventDefault()
+    return
+  }
+  if (key === 'ArrowDown' || lower === 'j') {
+    viewerEl.value?.scrollBy({ top: 48 })
+    event.preventDefault()
+    return
+  }
+  if (key === 'ArrowUp' || lower === 'k') {
+    viewerEl.value?.scrollBy({ top: -48 })
+    event.preventDefault()
+    return
+  }
+  if (key === 'ArrowRight' || lower === 'l') {
+    if (viewerEl.value?.scrollWidth > viewerEl.value?.clientWidth + 4) viewerEl.value.scrollBy({ left: event.shiftKey ? 260 : 56 })
+    else navigateRelative(1)
+    event.preventDefault()
+    return
+  }
+  if (key === 'ArrowLeft' || lower === 'h') {
+    if (viewerEl.value?.scrollWidth > viewerEl.value?.clientWidth + 4) viewerEl.value.scrollBy({ left: event.shiftKey ? -260 : -56 })
+    else navigateRelative(-1)
+    event.preventDefault()
   }
 }
 
@@ -469,8 +1426,14 @@ async function seedDemo(t) {
   }
   doc.value = {
     path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf',
-    size: 2836582, bytes, pdf, pageCount: pdf.numPages, sizes, password: '',
+    size: 2836582, bytes, pdf, pageCount: pdf.numPages, sizes,
+    pageLabels: await pdf.getPageLabels().catch(() => null), password: '',
   }
+  outlineItems.value = flattenOutline((await pdf.getOutline().catch(() => null)) || [])
+  currentPage.value = 1
+  pageField.value = '1'
+  navHistory.value = [1]
+  navHistoryIndex.value = 0
   mergeList.value = [
     { path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf' },
     { path: '/demo/附录A-财务数据.pdf', name: '附录A-财务数据.pdf' },
@@ -494,6 +1457,9 @@ async function seedDemo(t) {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', onResize)
+  window.addEventListener('keydown', handleKeydown)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
   if (DEMO) {
     seedDemo(DEMO)
     return
@@ -519,18 +1485,43 @@ onMounted(async () => {
       dragging.value = true
     }
   })
-  window.addEventListener('resize', onResize)
 })
 
 function onResize() {
-  // 适宽模式下随窗口重排
+  if (doc.value && zoomMode.value !== 'custom') invalidateRendering(80)
+  if ('__TAURI_INTERNALS__' in window) {
+    getCurrentWindow().isFullscreen().then((value) => {
+      fullscreen.value = value
+      if (!value && presentation.value) onFullscreenChange()
+    }).catch(() => {})
+  }
+}
+
+function onFullscreenChange() {
+  fullscreen.value = !!document.fullscreenElement
+  if (!fullscreen.value && presentation.value) {
+    presentation.value = false
+    if (presentationRestore) {
+      pageLayout.value = presentationRestore.layout
+      readerContinuous.value = presentationRestore.continuous
+      zoomMode.value = presentationRestore.zoomMode
+      zoom.value = presentationRestore.zoom
+    }
+  }
 }
 
 onBeforeUnmount(() => {
+  saveReaderState()
+  clearTimeout(saveStateTimer)
+  clearTimeout(searchTimer)
+  clearTimeout(zoomTimer)
   unlistenDrop?.()
   observer?.disconnect()
   thumbObserver?.disconnect()
+  readerThumbObserver?.disconnect()
   window.removeEventListener('resize', onResize)
+  window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 
 const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
@@ -551,7 +1542,7 @@ const emptyCopy = computed(() => {
 </script>
 
 <template>
-  <div class="app" :class="{ dragging }">
+  <div class="app" :class="{ dragging, fullscreen, presentation, 'reader-inverted': inverted && tool === 'read' }">
     <!-- 侧栏 -->
     <aside class="sidebar">
       <div class="brand">
@@ -650,14 +1641,17 @@ const emptyCopy = computed(() => {
         <header class="topbar">
           <div class="doc-info">
             <div class="doc-name" :title="doc.path">{{ doc.name }}</div>
-            <div class="doc-meta">{{ doc.pageCount }} 页 · {{ fmtSize(doc.size) }}</div>
+            <div class="doc-meta">
+              {{ doc.pageCount }} 页 · {{ fmtSize(doc.size) }}
+              <template v-if="tool === 'read'"> · 当前 {{ currentPageLabel }}</template>
+            </div>
           </div>
-          <div class="topbar-mid">
+          <div v-if="tool !== 'read'" class="topbar-mid">
             <span class="page-ind">{{ currentPage }} / {{ doc.pageCount }}</span>
             <div class="zoom-ctl">
-              <button class="zbtn" @click="zoomBy(1 / 1.2)">−</button>
+              <button class="zbtn" @click="zoomBy(-1)">−</button>
               <span class="zval">{{ Math.round(zoom * 100) }}%</span>
-              <button class="zbtn" @click="zoomBy(1.2)">+</button>
+              <button class="zbtn" @click="zoomBy(1)">+</button>
               <button class="zbtn fit" @click="zoomFit">适宽</button>
             </div>
           </div>
@@ -669,9 +1663,178 @@ const emptyCopy = computed(() => {
           </div>
         </header>
 
+        <!-- Sumatra 风格阅读工具栏 -->
+        <div v-if="tool === 'read'" class="readerbar">
+          <div class="readerbar-group">
+            <button
+              class="toolbtn"
+              :class="{ active: readerSidebar === 'outline' }"
+              title="显示/隐藏目录 (F12)"
+              @click="readerSidebar = readerSidebar === 'outline' ? 'none' : 'outline'"
+            >
+              <span v-html="ICONS.outline"></span>
+            </button>
+            <button
+              class="toolbtn"
+              :class="{ active: readerSidebar === 'thumbs' }"
+              title="显示/隐藏缩略图"
+              @click="readerSidebar = readerSidebar === 'thumbs' ? 'none' : 'thumbs'"
+            >
+              <span v-html="ICONS.thumbnails"></span>
+            </button>
+          </div>
+
+          <div class="readerbar-group">
+            <button class="toolbtn" :disabled="!canNavigateBack" title="后退 (⌥←)" @click="navigateHistory(-1)">
+              <span v-html="ICONS.back"></span>
+            </button>
+            <button class="toolbtn" :disabled="!canNavigateForward" title="前进 (⌥→)" @click="navigateHistory(1)">
+              <span v-html="ICONS.forward"></span>
+            </button>
+          </div>
+
+          <div class="readerbar-group page-jump">
+            <button class="toolbtn" title="上一页 (Page Up)" @click="navigateRelative(-1)">
+              <span v-html="ICONS.chevronLeft"></span>
+            </button>
+            <input
+              ref="pageInputEl"
+              v-model="pageField"
+              class="page-input"
+              aria-label="页码"
+              @focus="$event.target.select()"
+              @keydown.enter.prevent="submitPageField"
+              @blur="pageField = String(currentPage)"
+            />
+            <span class="page-total">/ {{ doc.pageCount }}</span>
+            <button class="toolbtn" title="下一页 (Page Down)" @click="navigateRelative(1)">
+              <span v-html="ICONS.chevronRight"></span>
+            </button>
+          </div>
+
+          <div class="readerbar-group zoom-group">
+            <button class="toolbtn" title="缩小 (−)" @click="zoomBy(-1)">
+              <span v-html="ICONS.minus"></span>
+            </button>
+            <select
+              class="toolbar-select zoom-select"
+              :value="zoomMode"
+              :title="`${zoomLabel} · ${zoomPercent}%`"
+              @change="setZoomMode($event.target.value)"
+            >
+              <option value="fit-page">适合页</option>
+              <option value="fit-width">适合宽度</option>
+              <option value="fit-content">适合内容</option>
+              <option value="custom">{{ zoomPercent }}%</option>
+            </select>
+            <button class="toolbtn" title="放大 (+)" @click="zoomBy(1)">
+              <span v-html="ICONS.plus"></span>
+            </button>
+          </div>
+
+          <div class="readerbar-group">
+            <button class="toolbtn" :class="{ active: pageLayout === 'single' }" title="单页 (⌘6)" @click="pageLayout = 'single'">
+              <span v-html="ICONS.singlePage"></span>
+            </button>
+            <button class="toolbtn" :class="{ active: pageLayout === 'facing' }" title="对开 (⌘7)" @click="pageLayout = 'facing'">
+              <span v-html="ICONS.facing"></span>
+            </button>
+            <button class="toolbtn" :class="{ active: pageLayout === 'book' }" title="书籍视图 (⌘8)" @click="pageLayout = 'book'">
+              <span v-html="ICONS.book"></span>
+            </button>
+            <button class="toolbtn" :class="{ active: readerContinuous }" title="连续模式 (C)" @click="readerContinuous = !readerContinuous">
+              <span v-html="ICONS.continuous"></span>
+            </button>
+          </div>
+
+          <div class="readerbar-spacer"></div>
+          <div class="readerbar-group">
+            <button class="toolbtn" title="向左旋转 ([)" @click="rotation = (rotation + 270) % 360">
+              <span v-html="ICONS.rotateLeft"></span>
+            </button>
+            <button class="toolbtn" title="向右旋转 (])" @click="rotation = (rotation + 90) % 360">
+              <span v-html="ICONS.rotateRight"></span>
+            </button>
+            <button class="toolbtn" title="查找 (⌘F)" @click="openFind">
+              <span v-html="ICONS.search"></span>
+            </button>
+            <button class="toolbtn" title="全屏 (F11)" @click="toggleFullscreen()">
+              <span v-html="ICONS.fullscreen"></span>
+            </button>
+          </div>
+        </div>
+
         <div class="workspace">
+          <!-- 阅读目录 / 缩略图侧栏 -->
+          <aside v-if="tool === 'read' && readerSidebar !== 'none'" class="reader-side">
+            <div class="reader-side-head">
+              <button :class="{ active: readerSidebar === 'outline' }" @click="readerSidebar = 'outline'">目录</button>
+              <button :class="{ active: readerSidebar === 'thumbs' }" @click="readerSidebar = 'thumbs'">缩略图</button>
+              <button class="reader-side-close" title="关闭侧栏" @click="readerSidebar = 'none'">×</button>
+            </div>
+            <div ref="readerSidebarEl" class="reader-side-body">
+              <template v-if="readerSidebar === 'outline'">
+                <button
+                  v-for="(item, index) in outlineItems"
+                  :key="index"
+                  class="outline-item"
+                  :style="{ paddingLeft: `${12 + item.level * 15}px` }"
+                  :class="{ bold: item.bold, italic: item.italic }"
+                  :title="item.title"
+                  @click="activateOutline(item)"
+                >
+                  {{ item.title }}
+                </button>
+                <div v-if="!outlineItems.length" class="side-empty">本文档没有目录</div>
+              </template>
+              <template v-else>
+                <button
+                  v-for="(size, index) in doc.sizes"
+                  :key="index"
+                  class="reader-thumb"
+                  :class="{ active: currentPage === index + 1 }"
+                  :data-reader-thumb="index"
+                  @click="navigateToPage(index + 1)"
+                >
+                  <span class="reader-thumb-paper">
+                    <canvas :data-reader-thumb-canvas="index"></canvas>
+                  </span>
+                  <span>{{ doc.pageLabels?.[index] || index + 1 }}</span>
+                </button>
+              </template>
+            </div>
+          </aside>
+
+          <!-- 文档内查找 -->
+          <div v-if="tool === 'read' && findState.open" class="findbar">
+            <span class="find-icon" v-html="ICONS.search"></span>
+            <input
+              ref="findInputEl"
+              v-model="findState.query"
+              placeholder="在文档中查找"
+              spellcheck="false"
+              @keydown.enter.prevent="findNext($event.shiftKey ? -1 : 1)"
+            />
+            <span class="find-count">{{ findCounter }}</span>
+            <button title="上一个 (⇧F3)" @click="findNext(-1)" v-html="ICONS.chevronUp"></button>
+            <button title="下一个 (F3)" @click="findNext(1)" v-html="ICONS.chevronDown"></button>
+            <button title="关闭 (Esc)" @click="closeFind" v-html="ICONS.close"></button>
+          </div>
+
           <!-- 阅读区 / 缩略图区 -->
-          <div class="viewer" ref="viewerEl" @scroll.passive="trackCurrentPage">
+          <div
+            class="viewer"
+            :class="{ panning: panState.active, paged: tool === 'read' && !readerContinuous }"
+            ref="viewerEl"
+            tabindex="0"
+            @scroll.passive="trackCurrentPage"
+            @wheel="onViewerWheel"
+            @pointerdown="startPan"
+            @pointermove="movePan"
+            @pointerup="endPan"
+            @pointercancel="endPan"
+            @contextmenu="onViewerContextMenu"
+          >
             <!-- 页面管理: 缩略图网格 -->
             <div v-if="tool === 'pages'" class="thumb-grid">
               <div
@@ -688,23 +1851,36 @@ const emptyCopy = computed(() => {
               </div>
             </div>
 
-            <!-- 连续滚动阅读 -->
-            <div v-else class="pages">
-              <div
-                v-for="(s, i) in doc.sizes"
-                :key="i"
-                class="page"
-                :data-page="i"
-                :style="{ width: s.w * zoom + 'px', height: s.h * zoom + 'px' }"
-              >
-                <canvas :data-cv="i"></canvas>
-                <img
-                  v-if="tool === 'watermark' && previewUrl"
-                  class="wm-preview"
-                  :src="previewUrl"
-                  alt=""
-                />
-                <span class="page-num">{{ i + 1 }}</span>
+            <!-- 单页 / 对开 / 书籍 × 连续 / 非连续 -->
+            <div
+              v-else
+              class="pages"
+              :class="{
+                'non-continuous': tool === 'read' && !readerContinuous,
+                'two-page': tool === 'read' && pageLayout !== 'single',
+              }"
+            >
+              <div v-for="row in readerRows" :key="row.join('-')" class="page-row">
+                <div
+                  v-for="i in row"
+                  :key="i"
+                  class="page"
+                  :class="{ current: tool === 'read' && currentPage === i + 1 }"
+                  :data-page="i"
+                  :style="pageStyle(doc.sizes[i], i)"
+                >
+                  <canvas :data-cv="i"></canvas>
+                  <div v-if="tool === 'read'" class="search-layer" :data-search-layer="i"></div>
+                  <div v-if="tool === 'read'" class="textLayer" :data-text-layer="i"></div>
+                  <div v-if="tool === 'read'" class="annotation-layer" :data-annotation-layer="i"></div>
+                  <img
+                    v-if="tool === 'watermark' && previewUrl"
+                    class="wm-preview"
+                    :src="previewUrl"
+                    alt=""
+                  />
+                  <span class="page-num">{{ doc.pageLabels?.[i] || i + 1 }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1197,6 +2373,112 @@ const emptyCopy = computed(() => {
   gap: 8px;
 }
 
+/* Sumatra 风格阅读工具栏 */
+.readerbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.readerbar::-webkit-scrollbar {
+  display: none;
+}
+.readerbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 7px;
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.readerbar-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+.readerbar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+.toolbtn {
+  width: 29px;
+  height: 29px;
+  border-radius: 6px;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.toolbtn:hover:not(:disabled),
+.toolbtn.active {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.toolbtn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.toolbtn > span {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+.toolbtn > span :deep(svg),
+.find-icon :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.page-jump {
+  gap: 3px;
+}
+.page-input {
+  width: 44px;
+  height: 27px;
+  padding: 0 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-1);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: #fff;
+}
+.page-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(22, 100, 255, 0.11);
+}
+.page-total {
+  min-width: 30px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.toolbar-select {
+  height: 27px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.toolbar-select:hover {
+  background: var(--fill-1);
+}
+.zoom-select {
+  width: 88px;
+  padding: 0 5px;
+}
+
 .alert {
   margin: 10px 18px 0;
   background: var(--danger-light);
@@ -1248,11 +2530,173 @@ const emptyCopy = computed(() => {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
+}
+.reader-side {
+  width: 224px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+  border-right: 1px solid var(--border);
+}
+.reader-side-head {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border);
+}
+.reader-side-head button {
+  padding: 4px 9px;
+  border-radius: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.reader-side-head button.active {
+  color: var(--primary);
+  background: var(--primary-light);
+  font-weight: 600;
+}
+.reader-side-head .reader-side-close {
+  width: 25px;
+  height: 25px;
+  margin-left: auto;
+  padding: 0;
+  font-size: 18px;
+}
+.reader-side-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 7px;
+}
+.outline-item {
+  width: 100%;
+  display: block;
+  padding-top: 6px;
+  padding-right: 8px;
+  padding-bottom: 6px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.outline-item:hover {
+  color: var(--primary);
+  background: var(--primary-lighter);
+}
+.outline-item.bold {
+  font-weight: 700;
+}
+.outline-item.italic {
+  font-style: italic;
+}
+.side-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+  padding: 32px 10px;
+}
+.reader-thumb {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border-radius: 7px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.reader-thumb:hover {
+  background: var(--fill-1);
+}
+.reader-thumb.active {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.reader-thumb-paper {
+  width: 132px;
+  min-height: 54px;
+  display: block;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(26, 34, 51, 0.18);
+}
+.reader-thumb-paper canvas {
+  width: 100%;
+  display: block;
+}
+.findbar {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 4px 5px 4px 10px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 8px 28px rgba(26, 34, 51, 0.18);
+}
+.find-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+}
+.findbar input {
+  width: 190px;
+  border: 0;
+  outline: 0;
+  color: var(--text-1);
+  background: transparent;
+  font-size: 13px;
+}
+.find-count {
+  min-width: 52px;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.findbar button {
+  width: 27px;
+  height: 27px;
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-2);
+}
+.findbar button:hover {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.findbar button :deep(svg) {
+  width: 100%;
+  height: 100%;
 }
 .viewer {
   flex: 1;
   overflow: auto;
   padding: 22px 0 40px;
+  background: #eef0f3;
+  outline: none;
+  overscroll-behavior: contain;
+}
+.viewer.panning {
+  cursor: grabbing;
+  user-select: none;
 }
 .pages {
   display: flex;
@@ -1260,17 +2704,71 @@ const emptyCopy = computed(() => {
   align-items: center;
   gap: 14px;
 }
+.pages.non-continuous {
+  min-width: min-content;
+  min-height: 100%;
+  justify-content: center;
+  padding: 12px 28px;
+}
+.page-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  min-width: min-content;
+}
 .page {
   position: relative;
   background: #fff;
   box-shadow: 0 1px 3px rgba(26, 34, 51, 0.09), 0 6px 22px rgba(26, 34, 51, 0.07);
   border-radius: 3px;
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .page canvas {
   width: 100%;
   height: 100%;
   display: block;
+}
+.search-layer,
+.annotation-layer,
+.textLayer {
+  position: absolute;
+  inset: 0;
+}
+.search-layer {
+  z-index: 1;
+  pointer-events: none;
+}
+.search-highlight {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(255, 175, 42, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(215, 132, 0, 0.18);
+}
+.search-highlight.active {
+  background: rgba(71, 145, 255, 0.46);
+  box-shadow: inset 0 0 0 1px rgba(22, 100, 255, 0.45);
+}
+.textLayer {
+  z-index: 2;
+}
+.annotation-layer {
+  z-index: 3;
+  pointer-events: none;
+}
+.annotation-layer :deep(.pdf-link) {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.annotation-layer :deep(.pdf-link:hover) {
+  background: rgba(22, 100, 255, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(22, 100, 255, 0.32);
 }
 .wm-preview {
   position: absolute;
@@ -1289,6 +2787,14 @@ const emptyCopy = computed(() => {
   padding: 1px 7px;
   border-radius: 99px;
   font-variant-numeric: tabular-nums;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.page:hover .page-num,
+.page.current .page-num {
+  opacity: 1;
 }
 
 /* 缩略图 */
@@ -1622,5 +3128,40 @@ const emptyCopy = computed(() => {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+/* 全屏保留阅读工具栏；演示模式只保留页面。 */
+.app.fullscreen > .sidebar,
+.app.presentation > .sidebar {
+  display: none;
+}
+.app.presentation .topbar,
+.app.presentation .readerbar,
+.app.presentation .reader-side,
+.app.presentation .findbar {
+  display: none;
+}
+.app.presentation .viewer {
+  padding: 0;
+  background: #16181c;
+}
+.app.presentation .pages.non-continuous {
+  padding: 0;
+}
+.app.presentation .page {
+  box-shadow: none;
+  border-radius: 0;
+}
+.app.presentation .page-num {
+  display: none;
+}
+.app.reader-inverted .viewer {
+  background: #16181c;
+}
+.app.reader-inverted .page {
+  background: #000;
+}
+.app.reader-inverted .page canvas {
+  filter: invert(1);
 }
 </style>

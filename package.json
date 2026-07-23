@@ -1,6 +1,6 @@
 {
   "name": "lightscroll",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "轻卷 LightScroll - 本地 PDF 工具箱。阅读、水印(图层/防删除)、加密解密、合并拆分、转图片、压缩。",
   "private": true,
   "scripts": {
