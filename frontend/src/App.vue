@@ -36,7 +36,7 @@ const lastResult = ref(null) // { label, path, extra }
 const busy = reactive({ active: false, stage: '', done: 0, total: 0 })
 const pwPrompt = reactive({ show: false, path: '', name: '', value: '', wrong: false })
 
-// ---------- 打开文档 ----------
+// ---------- Open Document ----------
 async function pickAndOpen() {
   const path = await openDialog({ multiple: false, title: 'Open PDF', filters: [{ name: 'PDF Document', extensions: ['pdf'] }] })
   if (typeof path === 'string') await loadDoc(path)
@@ -104,7 +104,7 @@ async function loadDoc(path, password) {
     }
   } catch (e) {
     if (e?.name === 'PasswordException' || /password/i.test(String(e?.name || e))) {
-      // 加密文档: 弹出密码输入, 输对后重新加载
+      // Encrypted document: show password modal, reload upon success
       pwPrompt.show = true
       pwPrompt.path = path
       pwPrompt.name = path.split(/[/\\]/).pop()
@@ -135,7 +135,7 @@ function closeDoc() {
   readerThumbObserver?.disconnect()
 }
 
-// ---------- Sumatra 风格阅读器 ----------
+// ---------- Reader Component ----------
 const viewerEl = ref(null)
 const readerSidebarEl = ref(null)
 const findInputEl = ref(null)
@@ -258,7 +258,7 @@ function saveReaderState() {
       inverted: inverted.value,
     }))
   } catch {
-    // localStorage 不可用不影响阅读
+    // LocalStorage unavailability does not affect reader
   }
 }
 
@@ -270,7 +270,7 @@ function scheduleSaveReaderState() {
 function pageScale(index) {
   if (!doc.value) return zoom.value
   if (tool.value !== 'read') return zoom.value
-  // 让 Map 的更新能触发模板重新计算尺寸。
+  // Trigger template dimension recalculation on Map updates
   void contentBoxRevision.value
   return scaleForPage({
     sizes: doc.value.sizes,
@@ -579,7 +579,7 @@ async function detectContentBox(index) {
         })
       }
     } catch {
-      // 扫描失败时使用保守的 6% 页边距估计。
+      // Fall back to conservative 6% margin estimate on scan failure
     } finally {
       contentBoxTasks.delete(index)
       contentBoxRevision.value++
@@ -648,7 +648,7 @@ async function goToDestination(dest) {
     const index = typeof ref === 'object' ? await doc.value.pdf.getPageIndex(ref) : Number(ref)
     await navigateToPage(index + 1)
   } catch {
-    // 损坏的内部链接不应中断阅读
+    // Broken internal links should not disrupt reading
   }
 }
 
@@ -678,12 +678,12 @@ function trackCurrentPage() {
       bestPage = page
     }
   })
-  // 对开/书籍模式中，同一行两页可见度相同；保留显式跳转到的那一页。
+  // In facing/book mode, preserve explicit target page when both are visible
   if (currentScore > 0 && currentScore >= bestScore - 1) bestPage = currentPage.value
   if (bestScore > -Infinity && bestPage !== currentPage.value) currentPage.value = bestPage
 }
 
-// ---------- 目录、阅读缩略图、全文搜索 ----------
+// ---------- Outline, Thumbnails, and Search ----------
 let readerThumbObserver = null
 const readerThumbRendered = new Set()
 
@@ -795,7 +795,7 @@ async function runSearch() {
       const matches = findMatchesInText(map.text, query)
       for (const match of matches) findState.results.push({ page: index, ...match })
     } catch {
-      // 某一页无法提取文字时继续搜索其余页面
+      // Continue searching remaining pages if text extraction fails for one page
     }
     findState.pagesDone = index + 1
     if (index % 4 === 3) await new Promise((resolve) => setTimeout(resolve))
@@ -874,7 +874,7 @@ function renderSearchHighlightsForPage(pageIndex) {
   })
 }
 
-// ---------- 键盘、滚轮、右键拖拽与全屏 ----------
+// ---------- Keyboard, Wheel, Panning, and Fullscreen ----------
 const panState = reactive({ active: false, moved: false, x: 0, y: 0, left: 0, top: 0, pointerId: -1 })
 let presentationRestore = null
 
@@ -928,7 +928,7 @@ async function toggleFullscreen(force) {
     }
     fullscreen.value = enter
   } catch {
-    // WKWebView 不允许原生全屏时仍使用无边框阅读布局。
+    // Fall back to borderless layout when native fullscreen is unavailable
     fullscreen.value = enter
   }
 }
@@ -1153,7 +1153,7 @@ function handleKeydown(event) {
   }
 }
 
-// ---------- 缩略图 (页面管理) ----------
+// ---------- Thumbnails (Page Management) ----------
 const selected = ref(new Set())
 let thumbObserver = null
 
@@ -1198,7 +1198,7 @@ function selectAll(flag) {
   selected.value = flag ? new Set(Array.from({ length: doc.value.pageCount }, (_, i) => i)) : new Set()
 }
 
-// ---------- 水印设置与实时预览 ----------
+// ---------- Watermark Settings & Live Preview ----------
 const wm = reactive({
   type: 'text',
   text: 'Internal Document - Do Not Distribute',
@@ -1245,7 +1245,7 @@ function refreshPreview() {
 
 watch(wm, refreshPreview)
 
-// ---------- 合并 ----------
+// ---------- Merge Documents ----------
 const mergeList = ref([])
 
 async function addMergeFiles() {
@@ -1266,7 +1266,7 @@ function moveMerge(i, dir) {
   mergeList.value = arr
 }
 
-// ---------- 转图片 / 压缩 设置 ----------
+// ---------- Export Images / Compression Settings ----------
 const exp = reactive({ format: 'png', dpi: 200, range: '' })
 const cmp = reactive({ dpi: 150, quality: 0.8 })
 const prot = reactive({ pw: '', pw2: '', noPrint: false, noCopy: false })
@@ -1298,7 +1298,7 @@ async function applyUnlock() {
   })
 }
 
-// ---------- 任务执行 ----------
+// ---------- Task Execution ----------
 function busyStart(stage, total) {
   busy.active = true
   busy.stage = stage
@@ -1404,10 +1404,10 @@ async function applyCompress() {
   })
 }
 
-// ---------- 拖拽与生命周期 ----------
+// ---------- Drag & Drop and Lifecycle ----------
 let unlistenDrop = null
 
-// 演示模式: ?demo=<tool> 加载内置示例文档, 供文档截图, 不依赖 Tauri
+// Demo mode: ?demo=<tool> loads sample document without Tauri dependencies
 const DEMO = new URLSearchParams(location.search).get('demo')
 
 async function seedDemo(t) {
@@ -1446,7 +1446,7 @@ async function seedDemo(t) {
   await nextTick()
   zoomFit()
   await nextTick()
-  // 截图环境里 IntersectionObserver 不可靠: 直接急切渲染
+  // Render eagerly in headless screenshot environment
   if (tool.value === 'pages') {
     for (let i = 0; i < pdf.numPages; i++) await renderThumb(i)
   } else {
@@ -1526,7 +1526,7 @@ onBeforeUnmount(() => {
 
 const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
 
-// 未打开文档时, 各工具的空状态文案
+// Empty state copy for each tool when no document is open
 const emptyCopy = computed(() => {
   const map = {
     read: 'Drag and drop a PDF file, or click to open',
@@ -1543,7 +1543,7 @@ const emptyCopy = computed(() => {
 
 <template>
   <div class="app" :class="{ dragging, fullscreen, presentation, 'reader-inverted': inverted && tool === 'read' }">
-    <!-- 侧栏 -->
+    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-logo" v-html="ICONS.brand"></span>
@@ -1572,7 +1572,7 @@ const emptyCopy = computed(() => {
       </div>
     </aside>
 
-    <!-- 主区 -->
+    <!-- Main Area -->
     <main class="content">
       <div v-if="errorMsg" class="alert">{{ errorMsg }}</div>
       <div v-if="lastResult" class="result-bar">
@@ -1582,9 +1582,9 @@ const emptyCopy = computed(() => {
         <button class="btn ghost small" @click="revealFile(lastResult.path)">Show File</button>
       </div>
 
-      <!-- 未打开文档 -->
+      <!-- No Document Opened -->
       <div v-if="!doc" class="empty">
-        <!-- 加密文档: 密码输入 -->
+        <!-- Encrypted Document: Password Prompt -->
         <div v-if="pwPrompt.show" class="pw-card">
           <span class="dropzone-icon pw-icon" v-html="ICONS.lock"></span>
           <div class="pw-title">'{{ pwPrompt.name }}' is password protected</div>
@@ -1605,7 +1605,7 @@ const emptyCopy = computed(() => {
           </div>
         </div>
 
-        <!-- 合并不需要先开文档: 直接给独立工作区 -->
+        <!-- Merge: Standalone workspace without open document -->
         <div v-else-if="tool === 'merge'" class="merge-standalone">
           <div class="panel-head">
             <h2>Merge PDF</h2>
@@ -1628,7 +1628,7 @@ const emptyCopy = computed(() => {
           </button>
         </div>
 
-        <!-- 其余工具: 带工具语境的打开引导 -->
+        <!-- Other Tools: File open guide -->
         <div v-else class="dropzone" @click="pickAndOpen">
           <span class="dropzone-icon" v-html="ICONS[{ read: 'read', pages: 'pages', export: 'image', compress: 'compress', protect: 'lock', unlock: 'unlock' }[tool] || 'watermark']"></span>
           <div class="dropzone-title">{{ emptyCopy }}</div>
@@ -1637,7 +1637,7 @@ const emptyCopy = computed(() => {
       </div>
 
       <template v-else>
-        <!-- 顶栏 -->
+        <!-- Header -->
         <header class="topbar">
           <div class="doc-info">
             <div class="doc-name" :title="doc.path">{{ doc.name }}</div>
@@ -1663,7 +1663,7 @@ const emptyCopy = computed(() => {
           </div>
         </header>
 
-        <!-- Sumatra 风格阅读工具栏 -->
+        <!-- Reader Toolbar -->
         <div v-if="tool === 'read'" class="readerbar">
           <div class="readerbar-group">
             <button
@@ -1765,7 +1765,7 @@ const emptyCopy = computed(() => {
         </div>
 
         <div class="workspace">
-          <!-- 阅读目录 / 缩略图侧栏 -->
+          <!-- Outline / Thumbnails Sidebar -->
           <aside v-if="tool === 'read' && readerSidebar !== 'none'" class="reader-side">
             <div class="reader-side-head">
               <button :class="{ active: readerSidebar === 'outline' }" @click="readerSidebar = 'outline'">Outline</button>
@@ -1805,7 +1805,7 @@ const emptyCopy = computed(() => {
             </div>
           </aside>
 
-          <!-- 文档内查找 -->
+          <!-- In-Document Search -->
           <div v-if="tool === 'read' && findState.open" class="findbar">
             <span class="find-icon" v-html="ICONS.search"></span>
             <input
@@ -1821,7 +1821,7 @@ const emptyCopy = computed(() => {
             <button title="Close (Esc)" @click="closeFind" v-html="ICONS.close"></button>
           </div>
 
-          <!-- 阅读区 / 缩略图区 -->
+          <!-- Reader / Thumbnail Canvas -->
           <div
             class="viewer"
             :class="{ panning: panState.active, paged: tool === 'read' && !readerContinuous }"
@@ -1835,7 +1835,7 @@ const emptyCopy = computed(() => {
             @pointercancel="endPan"
             @contextmenu="onViewerContextMenu"
           >
-            <!-- 页面管理: 缩略图网格 -->
+            <!-- Page Management: Thumbnail Grid -->
             <div v-if="tool === 'pages'" class="thumb-grid">
               <div
                 v-for="(s, i) in doc.sizes"
@@ -1851,7 +1851,7 @@ const emptyCopy = computed(() => {
               </div>
             </div>
 
-            <!-- 单页 / 对开 / 书籍 × 连续 / 非连续 -->
+            <!-- Single / Facing / Book x Continuous / Discrete -->
             <div
               v-else
               class="pages"
@@ -1885,14 +1885,14 @@ const emptyCopy = computed(() => {
             </div>
           </div>
 
-          <!-- 工具面板 -->
+          <!-- Tool Panels -->
           <aside v-if="tool !== 'read'" class="panel">
             <div class="panel-head">
               <h2>{{ toolMeta.name }}</h2>
               <p>{{ toolMeta.desc }}</p>
             </div>
 
-            <!-- 水印 -->
+            <!-- Watermark -->
             <template v-if="tool === 'watermark'">
               <div class="field">
                 <div class="field-label">Watermark Type</div>
@@ -1964,7 +1964,7 @@ const emptyCopy = computed(() => {
               <button class="btn primary wide" @click="applyWatermark">Add Watermark</button>
             </template>
 
-            <!-- 页面管理 -->
+            <!-- Page Management -->
             <template v-else-if="tool === 'pages'">
               <div class="field">
                 <div class="field-label">Selected {{ selected.size }} / {{ doc.pageCount }} Pages</div>
@@ -1980,7 +1980,7 @@ const emptyCopy = computed(() => {
               <div class="field-hint pad-top">All operations output to a new file, the original document is untouched</div>
             </template>
 
-            <!-- 合并 -->
+            <!-- Merge -->
             <template v-else-if="tool === 'merge'">
               <div class="merge-list">
                 <div v-for="(m, i) in mergeList" :key="m.path" class="merge-item">
@@ -1998,7 +1998,7 @@ const emptyCopy = computed(() => {
               <div class="field-hint pad-top">You can also drag PDFs directly into the window to add them to the list</div>
             </template>
 
-            <!-- 转图片 -->
+            <!-- Export to Images -->
             <template v-else-if="tool === 'export'">
               <div class="field">
                 <div class="field-label">Image Format</div>
@@ -2021,7 +2021,7 @@ const emptyCopy = computed(() => {
               <div class="field-hint pad-top">Images are saved next to the original document, numbered by page</div>
             </template>
 
-            <!-- 加密 -->
+            <!-- Encrypt -->
             <template v-else-if="tool === 'protect'">
               <div class="field">
                 <div class="field-label">Open Password</div>
@@ -2042,7 +2042,7 @@ const emptyCopy = computed(() => {
               <button class="btn primary wide" @click="applyProtect">Output Encrypted</button>
             </template>
 
-            <!-- 解密 -->
+            <!-- Decrypt -->
             <template v-else-if="tool === 'unlock'">
               <div class="field" v-if="doc.password">
                 <div class="field-label">Current document is unlocked with password</div>
@@ -2055,7 +2055,7 @@ const emptyCopy = computed(() => {
               <button class="btn primary wide" :disabled="!doc.password" @click="applyUnlock">Output without Password</button>
             </template>
 
-            <!-- 压缩 -->
+            <!-- Compress -->
             <template v-else-if="tool === 'compress'">
               <div class="field">
                 <div class="field-label">Resolution</div>
@@ -2071,12 +2071,12 @@ const emptyCopy = computed(() => {
       </template>
     </main>
 
-    <!-- 拖拽遮罩 -->
+    <!-- Drag Overlay -->
     <div v-if="dragging" class="drag-overlay">
       <div class="drag-overlay-text">Release to Nexus PDF</div>
     </div>
 
-    <!-- 任务进度 -->
+    <!-- Task Progress -->
     <div v-if="busy.active" class="busy-mask">
       <div class="busy-box">
         <div class="busy-stage">{{ busy.stage }}</div>
@@ -2096,7 +2096,7 @@ const emptyCopy = computed(() => {
   overflow: hidden;
 }
 
-/* 侧栏 (轻系列同款) */
+/* Sidebar */
 .sidebar {
   width: 190px;
   flex-shrink: 0;
@@ -2192,7 +2192,7 @@ const emptyCopy = computed(() => {
   margin-top: 1px;
 }
 
-/* 主区 */
+/* Main Area */
 .content {
   flex: 1;
   min-width: 0;
@@ -2302,7 +2302,7 @@ const emptyCopy = computed(() => {
   color: var(--text-3);
 }
 
-/* 顶栏 */
+/* Header */
 .topbar {
   display: flex;
   align-items: center;
@@ -2378,7 +2378,7 @@ const emptyCopy = computed(() => {
   gap: 8px;
 }
 
-/* Sumatra 风格阅读工具栏 */
+/* Reader Toolbar */
 .readerbar {
   min-height: 42px;
   display: flex;
@@ -2531,7 +2531,7 @@ const emptyCopy = computed(() => {
   font-weight: 500;
 }
 
-/* 工作区 */
+/* Workspace */
 .workspace {
   flex: 1;
   display: flex;
@@ -2804,7 +2804,7 @@ const emptyCopy = computed(() => {
   opacity: 1;
 }
 
-/* 缩略图 */
+/* Thumbnails */
 .thumb-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -2861,7 +2861,7 @@ const emptyCopy = computed(() => {
   display: flex;
 }
 
-/* 工具面板 */
+/* Tool Panels */
 .panel {
   width: 280px;
   flex-shrink: 0;
@@ -2957,7 +2957,7 @@ const emptyCopy = computed(() => {
   color: var(--text-3);
 }
 
-/* 合并列表 */
+/* Merge List */
 .merge-list {
   display: flex;
   flex-direction: column;
@@ -3011,7 +3011,7 @@ const emptyCopy = computed(() => {
   background: var(--danger-light);
 }
 
-/* 按钮 */
+/* Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -3072,7 +3072,7 @@ const emptyCopy = computed(() => {
   display: block;
 }
 
-/* 遮罩 */
+/* Overlays */
 .drag-overlay {
   position: fixed;
   inset: 10px;
@@ -3139,7 +3139,7 @@ const emptyCopy = computed(() => {
   text-align: right;
 }
 
-/* 全屏保留阅读工具栏；演示模式只保留页面。 */
+/* Fullscreen preserves reader toolbar; demo mode preserves pages only */
 .app.fullscreen > .sidebar,
 .app.presentation > .sidebar {
   display: none;

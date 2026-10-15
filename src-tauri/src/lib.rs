@@ -1,6 +1,6 @@
 use std::path::Path;
 
-/// 生成不冲突的输出路径: (doc.pdf, "_水印", "pdf") -> doc_水印.pdf
+
 #[tauri::command]
 fn output_path(input: String, suffix: String, ext: String) -> String {
     let p = Path::new(&input);
@@ -23,7 +23,7 @@ fn file_size(path: String) -> u64 {
     std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
 }
 
-/// 在文件管理器中显示文件
+
 #[tauri::command]
 fn reveal(path: String) {
     #[cfg(target_os = "macos")]

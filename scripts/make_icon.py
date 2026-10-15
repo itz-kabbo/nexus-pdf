@@ -1,5 +1,4 @@
-# 生成应用图标 1024x1024: 蓝色渐变圆角矩形 + 白色折角书页 + 速度光痕 (轻系列家族语言)
-# 用法: uv run --with pillow python scripts/make_icon.py
+# Generate application icon 1024x1024: Indigo gradient rounded rect + white folded sheet
 from PIL import Image, ImageDraw, ImageFilter
 
 S = 1024
@@ -8,9 +7,9 @@ R = 200
 SS = 4
 s, m, r = S * SS, M * SS, R * SS
 
-# ---- 渐变底 (与轻影同款: 亮蓝 -> 深蓝) ----
-top = (107, 219, 255)   # #6BDBFF 青
-bottom = (46, 139, 255) # #2E8BFF 亮蓝
+# ---- Gradient Background (Indigo: #7C7BE0 -> #5E5CE6) ----
+top = (124, 123, 224)
+bottom = (94, 92, 230)
 grad = Image.new("RGB", (s, s))
 px = grad.load()
 for y in range(s):
@@ -36,28 +35,24 @@ icon = Image.new("RGBA", (s, s), (0, 0, 0, 0))
 icon.paste(grad, (0, 0), mask)
 d = ImageDraw.Draw(icon)
 
-# ---- 白色折角书页 (居右, 光学居中) ----
+# ---- White Folded Page ----
 pw, ph = s * 0.30, s * 0.42
 px0, py0 = s * 0.435, (s - ph) / 2
-fold = pw * 0.34  # 折角尺寸
+fold = pw * 0.34
 rad = s * 0.028
 
-# 页面主体: 圆角矩形去掉右上角
 page = Image.new("L", (s, s), 0)
 pd = ImageDraw.Draw(page)
 pd.rounded_rectangle([px0, py0, px0 + pw, py0 + ph], radius=rad, fill=255)
-# 切掉右上折角区域
 pd.polygon([(px0 + pw - fold, py0 - 2), (px0 + pw + 2, py0 - 2), (px0 + pw + 2, py0 + fold)], fill=0)
 icon.paste((255, 255, 255, 255), (0, 0), page)
 
-# 折角: 浅蓝三角 (翻折的背面)
 d.polygon(
     [(px0 + pw - fold, py0), (px0 + pw - fold, py0 + fold), (px0 + pw, py0 + fold)],
-    fill=(203, 241, 255, 255),
+    fill=(224, 223, 252, 255),
 )
 
-# 页面上的文字线条 (淡蓝)
-line_c = (110, 195, 255, 255)
+line_c = (124, 123, 224, 255)
 lw = int(s * 0.026)
 lx = px0 + pw * 0.18
 for i, wfrac in enumerate([0.42, 0.64, 0.64, 0.45]):
@@ -66,7 +61,6 @@ for i, wfrac in enumerate([0.42, 0.64, 0.64, 0.45]):
     for ex in (lx, lx + pw * wfrac):
         d.ellipse([ex - lw / 2, y - lw / 2, ex + lw / 2, y + lw / 2], fill=line_c)
 
-# ---- 左侧三道速度光痕 (家族签名) ----
 lw2 = int(s * 0.052)
 lx2 = s * 0.20
 cy = s * 0.5

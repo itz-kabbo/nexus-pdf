@@ -1,5 +1,6 @@
+/* Primary accent color + modern gray palette with subtle shadows */
 :root {
-    /* 单一强调色 + 冷灰家族，蓝色染色阴影 */
+    
     --primary: #5E5CE6;
     --primary-hover: #4A48C8;
     --primary-light: #EEF2FF;
@@ -81,7 +82,7 @@ input:focus-visible {
     background: rgba(26, 34, 51, 0.24);
 }
 
-/* pdf.js 文字层：让 PDF 文字可选择、复制，同时保持画布作为视觉来源。 */
+
 .textLayer {
     position: absolute;
     inset: 0;

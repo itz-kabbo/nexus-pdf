@@ -1,32 +1,31 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     width: 1600px; height: 420px; overflow: hidden;
-    font-family: -apple-system, 'PingFang SC', sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
     background:
-      radial-gradient(ellipse 900px 500px at 85% -10%, rgba(22,100,255,0.14), transparent 60%),
-      radial-gradient(ellipse 700px 400px at 8% 110%, rgba(0,200,255,0.10), transparent 60%),
-      linear-gradient(180deg, #f8faff 0%, #eef4ff 100%);
+      radial-gradient(ellipse 900px 500px at 85% -10%, rgba(94,92,230,0.18), transparent 60%),
+      radial-gradient(ellipse 700px 400px at 8% 110%, rgba(124,123,224,0.12), transparent 60%),
+      linear-gradient(180deg, #F5F5F7 0%, #EBEBF0 100%);
     display: flex; align-items: center; justify-content: center;
     position: relative;
   }
   .wrap { display: flex; align-items: center; gap: 56px; }
-  .logo { width: 168px; height: 168px; filter: drop-shadow(0 18px 40px rgba(22,100,255,0.35)); }
-  .name { font-size: 76px; font-weight: 800; color: #17233d; letter-spacing: 0.02em; line-height: 1.15; }
-  .name .en { font-weight: 600; font-size: 42px; color: #7a87a3; margin-left: 18px; letter-spacing: 0.01em; }
+  .logo { width: 168px; height: 168px; filter: drop-shadow(0 18px 40px rgba(94,92,230,0.35)); }
+  .name { font-size: 76px; font-weight: 800; color: #1a2233; letter-spacing: -0.02em; line-height: 1.15; }
   .slogan { font-size: 30px; color: #4b5566; margin-top: 14px; font-weight: 500; }
-  .slogan b { color: #1664ff; font-weight: 700; }
+  .slogan b { color: #5E5CE6; font-weight: 700; }
   .chips { display: flex; gap: 12px; margin-top: 26px; flex-wrap: wrap; max-width: 860px; }
   .chip {
     font-size: 19px; color: #2d3a53; background: rgba(255,255,255,0.9);
-    border: 1px solid rgba(22,100,255,0.16); border-radius: 999px;
-    padding: 8px 20px; box-shadow: 0 2px 10px rgba(22,100,255,0.07);
+    border: 1px solid rgba(94,92,230,0.16); border-radius: 999px;
+    padding: 8px 20px; box-shadow: 0 2px 10px rgba(94,92,230,0.07);
   }
-  .chip.hot { color: #1664ff; border-color: rgba(22,100,255,0.45); font-weight: 600; }
+  .chip.hot { color: #5E5CE6; border-color: rgba(94,92,230,0.45); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -34,25 +33,25 @@
     <svg class="logo" viewBox="0 0 40 40" fill="none">
       <rect width="40" height="40" rx="10.5" fill="url(#g)"/>
       <path d="M17 9.5h8.2L30 14.3V29a1.8 1.8 0 0 1-1.8 1.8H17A1.8 1.8 0 0 1 15.2 29V11.3A1.8 1.8 0 0 1 17 9.5z" fill="#fff"/>
-      <path d="M25.2 9.5l4.8 4.8h-4.8V9.5z" fill="#CBF1FF"/>
-      <path d="M18.6 17h5.2M18.6 20.6h7M18.6 24.2h7M18.6 27.8h4.4" stroke="#6EC3FF" stroke-width="1.7" stroke-linecap="round"/>
+      <path d="M25.2 9.5l4.8 4.8h-4.8V9.5z" fill="#E0DFFC"/>
+      <path d="M18.6 17h5.2M18.6 20.6h7M18.6 24.2h7M18.6 27.8h4.4" stroke="#7C7BE0" stroke-width="1.7" stroke-linecap="round"/>
       <path d="M6.5 14.5h4M6.5 20h2.8M6.5 25.5h4" stroke="#fff" stroke-opacity=".85" stroke-width="2.2" stroke-linecap="round"/>
       <defs><linearGradient id="g" x1="4" y1="3" x2="36" y2="38" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#6BDBFF"/><stop offset="1" stop-color="#2E8BFF"/>
+        <stop stop-color="#7C7BE0"/><stop offset="1" stop-color="#5E5CE6"/>
       </linearGradient></defs>
     </svg>
     <div>
-      <div class="name">轻卷<span class="en">Nexus PDF</span></div>
-      <div class="slogan">PDF 工具箱 · <b>阅读 · 水印 · 加密</b> · 全部本地完成</div>
+      <div class="name">Nexus PDF</div>
+      <div class="slogan">PDF Toolbox · <b>Read · Watermark · Protect</b> · 100% Local</div>
       <div class="chips">
-        <span class="chip hot">防删除水印</span>
-        <span class="chip">图层水印</span>
-        <span class="chip hot">加密 · 解密</span>
-        <span class="chip">合并 · 拆分 · 旋转</span>
-        <span class="chip">PDF 转图片</span>
-        <span class="chip">压缩</span>
-        <span class="chip">流畅阅读</span>
-        <span class="chip hot">安装包仅 4MB</span>
+        <span class="chip hot">Tamper-Proof Watermark</span>
+        <span class="chip">Layer Watermark</span>
+        <span class="chip hot">Encrypt · Decrypt</span>
+        <span class="chip">Merge · Split · Rotate</span>
+        <span class="chip">PDF to Images</span>
+        <span class="chip">Compress</span>
+        <span class="chip">Smooth Reader</span>
+        <span class="chip hot">Ultra Lightweight</span>
       </div>
     </div>
   </div>

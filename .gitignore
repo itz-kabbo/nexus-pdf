@@ -4,5 +4,7 @@ src-tauri/target
 src-tauri/gen/schemas
 .DS_Store
 
-_lightscroll_ref/
+
 design_update.py
+design_update.py
+clean_project.py

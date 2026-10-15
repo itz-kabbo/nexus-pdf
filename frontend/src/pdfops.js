@@ -1,4 +1,4 @@
-// PDF 操作核心: pdf.js 负责渲染/栅格化, pdf-lib 负责重组/叠加, 全部本地完成
+// Core PDF Operations: pdf.js handles rendering/rasterization, pdf-lib handles mutation/overlays, 100% locally.
 import * as pdfjs from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { PDFDocument, degrees } from '@cantoo/pdf-lib'
@@ -19,29 +19,29 @@ export function revealFile(path) {
   invoke('reveal', { path })
 }
 
-// 打开 PDF: 返回 { bytes, pdf } — bytes 供 pdf-lib 重组, pdf 供渲染
-// 加密文档传入 password; 密码错误/缺失时 pdf.js 抛 PasswordException
+// Open PDF: Returns { bytes, pdf } - bytes for pdf-lib mutation, pdf for rendering
+// Pass password for encrypted documents; pdf.js throws PasswordException if wrong/missing
 export async function openPdf(path, password) {
   const bytes = await readFile(path)
-  // pdf.js 会接管传入的 buffer, 复制一份保留给 pdf-lib
+  // pdf.js takes ownership of buffer; keep a copy for pdf-lib
   const copy = new Uint8Array(bytes)
   const pdf = await pdfjs.getDocument({ data: bytes, password, cMapUrl: undefined }).promise
   return { bytes: copy, pdf }
 }
 
-// 从内存字节打开 (demo 截图模式用, 不经文件系统)
+// Open from memory bytes (for demo mode, bypasses file system)
 export async function openPdfBytes(bytes) {
   const copy = new Uint8Array(bytes)
   const pdf = await pdfjs.getDocument({ data: bytes }).promise
   return { bytes: copy, pdf }
 }
 
-// pdf-lib 侧统一的带密码加载
+// Unified password-protected document loading for pdf-lib
 function loadDoc(bytes, password) {
   return PDFDocument.load(bytes, password ? { password } : undefined)
 }
 
-// ---------- 加密 / 解密 ----------
+// ---------- Encryption / Decryption ----------
 export async function encryptPdf(bytes, password, { noPrint, noCopy }, srcPassword) {
   const doc = await loadDoc(bytes, srcPassword)
   doc.encrypt({
@@ -54,10 +54,10 @@ export async function encryptPdf(bytes, password, { noPrint, noCopy }, srcPasswo
 
 export async function decryptPdf(bytes, password) {
   const doc = await loadDoc(bytes, password)
-  return doc.save() // 重存即去除加密
+  return doc.save() // Re-saving without password removes encryption
 }
 
-// "1-3,5,8-10" -> 0 基页码 Set; 空串/all = 全部
+// "1-3,5,8-10" -> 0-based page index Set; empty string or "all" = all pages
 export function parseRange(str, pageCount) {
   const all = new Set(Array.from({ length: pageCount }, (_, i) => i))
   if (!str || !str.trim()) return all
@@ -82,7 +82,7 @@ export function parseRange(str, pageCount) {
   return set
 }
 
-// ---------- 水印贴图 (canvas 生成, 天然支持中文/系统字体/旋转/平铺) ----------
+// ---------- Watermark Canvas Generation (supports system fonts, rotation, tiling) ----------
 
 const WM_COLORS = {
   gray: 'rgba(102,112,133,{a})',
@@ -92,7 +92,7 @@ const WM_COLORS = {
 }
 
 /**
- * 为指定页面尺寸(pt)生成透明水印覆盖层 canvas。
+ * Generates transparent watermark overlay canvas for the specified page dimensions (pt).
  * opts: { type:'text'|'image', text, color, sizePct, opacity, angle, tile, density, imageBitmap }
  */
 export function makeOverlayCanvas(pageW, pageH, opts, scale = 2) {
@@ -127,7 +127,7 @@ export function makeOverlayCanvas(pageW, pageH, opts, scale = 2) {
   }
 
   if (opts.tile) {
-    // 平铺: 以单元尺寸为步进, 铺满整页(含出血, 保证旋转后无缺角)
+    // Tiling: step by tile unit size across page including bleed margins
     const gapFactor = { sparse: 2.6, normal: 1.9, dense: 1.35 }[opts.density] || 1.9
     let unit
     if (opts.type === 'text') {
@@ -164,13 +164,13 @@ function canvasToJpgBytes(cv, quality) {
   })
 }
 
-// ---------- 图层水印: pdf-lib 在原页面上叠加透明 PNG, 文件几乎不变大 ----------
-// 页面可能带 /Rotate 属性(扫描件/横向页常见): 覆盖层按"显示尺寸"生成,
-// 再反向旋转画回页面坐标系, 保证阅读器里水印方向始终端正
+// ---------- Layer Watermark: pdf-lib overlays transparent PNG on original vector page ----------
+// Pages may have /Rotate attribute: overlay is generated at visible display dimensions,
+// then counter-rotated into page coordinate system to ensure correct orientation
 export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress, password) {
   const doc = await loadDoc(bytes, password)
   const pages = doc.getPages()
-  // 相同 尺寸+旋转 的页共享一个覆盖层图片 (PDF 里同一 XObject 只存一份)
+  // Pages sharing the same dimensions + rotation reuse the same image XObject
   const cache = new Map()
   let done = 0
   for (let i = 0; i < pages.length; i++) {
@@ -178,7 +178,7 @@ export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress, pass
     const page = pages[i]
     const { width: pw, height: ph } = page.getSize()
     const rot = (((page.getRotation().angle || 0) % 360) + 360) % 360
-    const vw = rot % 180 === 0 ? pw : ph // 显示宽高
+    const vw = rot % 180 === 0 ? pw : ph // Display dimensions
     const vh = rot % 180 === 0 ? ph : pw
     const key = `${Math.round(vw)}x${Math.round(vh)}@${rot}`
     let img = cache.get(key)
@@ -187,7 +187,7 @@ export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress, pass
       img = await doc.embedPng(await canvasToPngBytes(cv))
       cache.set(key, img)
     }
-    // /Rotate 是显示时顺时针旋转; 预先逆时针旋转贴图抵消
+    // /Rotate is clockwise on display; counter-rotate here to offset
     const place = {
       0: { x: 0, y: 0, rotate: degrees(0) },
       90: { x: pw, y: 0, rotate: degrees(90) },
@@ -196,12 +196,12 @@ export async function watermarkLayer(bytes, pdf, range, wmOpts, onProgress, pass
     }[rot]
     page.drawImage(img, { ...place, width: vw, height: vh })
     onProgress?.(++done)
-    await new Promise((r) => setTimeout(r)) // 让出主线程刷新进度
+    await new Promise((r) => setTimeout(r)) // Yield to main thread to update progress UI
   }
   return doc.save()
 }
 
-// ---------- 栅格水印: 范围内的页整页渲染成像素+水印(无法移除), 范围外保留原始矢量 ----------
+// ---------- Tamper-Proof Watermark: renders pages to pixels with embedded watermark ----------
 export async function watermarkRaster(bytes, pdf, range, wmOpts, dpi, quality, onProgress, password) {
   const src = await loadDoc(bytes, password)
   const out = await PDFDocument.create()
@@ -235,7 +235,7 @@ export async function watermarkRaster(bytes, pdf, range, wmOpts, dpi, quality, o
   return out.save()
 }
 
-// ---------- 页面操作 ----------
+// ---------- Page Operations ----------
 export async function extractPages(bytes, keep, password) {
   const src = await loadDoc(bytes, password)
   const out = await PDFDocument.create()
@@ -272,7 +272,7 @@ export async function mergePdfs(paths, onProgress) {
   return out.save()
 }
 
-// ---------- 转图片 / 压缩 ----------
+// ---------- Export Images / Compression ----------
 export async function pageToCanvas(pdf, pageIndex, scale) {
   const page = await pdf.getPage(pageIndex + 1)
   const vp = page.getViewport({ scale })
@@ -294,7 +294,7 @@ export async function exportImages(pdf, range, dpi, format, quality, docPath, on
   for (const i of [...range].sort((a, b) => a - b)) {
     const cv = await pageToCanvas(pdf, i, scale)
     const bytes = format === 'png' ? await canvasToPngBytes(cv) : await canvasToJpgBytes(cv, quality)
-    // 每张图各自走防冲突命名, 重复导出不会覆盖之前的成果
+    // Non-conflicting naming for each exported image
     const path = await outputPath(docPath, `_p${String(i + 1).padStart(3, '0')}`, format)
     await writeFile(path, bytes)
     outs.push(path)

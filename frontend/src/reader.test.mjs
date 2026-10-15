@@ -21,15 +21,15 @@ test('builds Sumatra-style single, facing and book rows', () => {
 test('maps search matches across PDF text items', () => {
   const map = buildTextMap([
     { type: 'beginMarkedContent' },
-    { str: 'Light', hasEOL: false },
-    { str: 'Scroll', hasEOL: true },
+    { str: 'Nexus', hasEOL: false },
+    { str: 'PDF', hasEOL: true },
     { type: 'endMarkedContent' },
     { str: 'PDF', hasEOL: false },
   ])
-  const [match] = findMatchesInText(map.text, 'lightsCROLL')
+  const [match] = findMatchesInText(map.text, 'nexusPDF')
   assert.deepEqual(segmentsForMatch(map.segments, match), [
     { itemIndex: 0, start: 0, end: 5 },
-    { itemIndex: 1, start: 0, end: 6 },
+    { itemIndex: 1, start: 0, end: 3 },
   ])
 })
 

@@ -18,8 +18,8 @@ export function nextZoomStep(current, direction) {
   return [...ZOOM_STEPS].reverse().find((step) => step < current - epsilon) ?? ZOOM_MIN
 }
 
-// Sumatra 的显示模式由「列布局」和「是否连续」两部分组成。
-// book 模式的第一页是封面，之后从第 2 页开始两两成组。
+// Display mode consists of column layout and continuous scrolling options.
+// In book mode, page 1 is the cover, followed by two-page pairs from page 2.
 export function buildPageRows(pageCount, layout = 'single') {
   if (layout === 'single') {
     return Array.from({ length: pageCount }, (_, index) => [index])
@@ -63,8 +63,8 @@ export function rotatedSize(size, rotation) {
 }
 
 /**
- * 把 Sumatra 的虚拟缩放模式换算成当前页组的实际比例。
- * contentBoxes 是页面内容在可见页面中的归一化包围盒，用于「适合内容」。
+ * Converts virtual zoom mode to actual scale ratio for current page group.
+ * contentBoxes is normalized bounding box for visible content in 'fit-content' mode.
  */
 export function scaleForPage({
   sizes,

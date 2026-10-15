@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 Linux 依赖
+      - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
@@ -49,7 +49,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: 安装依赖
+      - name: Install dependencies
         run: |
           npm ci
           npm ci --prefix frontend
@@ -59,9 +59,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: '轻卷 LightScroll ${{ github.ref_name }}'
-          releaseBody: 'PDF 工具箱：阅读 / 水印(图层/防删除) / 加密解密 / 合并拆分 / 转图片 / 压缩。下载对应平台的安装包即可使用。'
+          releaseName: 'Nexus PDF ${{ github.ref_name }}'
+          releaseBody: 'Nexus PDF: Local PDF Toolbox. Fast, secure, and private PDF reading, watermarking, page management, merging, encryption, compression, and conversion.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
