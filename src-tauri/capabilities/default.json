@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口权限: 对话框 + 文件读写(PDF 处理结果落盘)",
+  "description": "Main window permissions: dialog + file read/write (PDF processing results)",
   "windows": ["main"],
   "permissions": [
     "core:default",

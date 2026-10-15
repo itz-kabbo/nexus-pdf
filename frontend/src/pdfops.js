@@ -67,7 +67,7 @@ export function parseRange(str, pageCount) {
     if (!p) continue
     const m = p.match(/^(\d+)\s*[-—~]\s*(\d+)$/)
     if (m) {
-      if (+m[1] > +m[2]) throw new Error(`页码范围 "${p}" 应从小到大, 如 ${m[2]}-${m[1]}`)
+      if (+m[1] > +m[2]) throw new Error(`Page range "${p}" should be from small to large, e.g., ${m[2]}-${m[1]}`)
       const a = Math.max(1, +m[1])
       const b = Math.min(pageCount, +m[2])
       for (let i = a; i <= b; i++) set.add(i - 1)
@@ -75,10 +75,10 @@ export function parseRange(str, pageCount) {
       const n = +p
       if (n >= 1 && n <= pageCount) set.add(n - 1)
     } else {
-      throw new Error(`页码格式不对: "${p}"，示例: 1-3,5,8-10`)
+      throw new Error(`Invalid page range format: "${p}", e.g.: 1-3,5,8-10`)
     }
   }
-  if (set.size === 0) throw new Error('页码范围没有命中任何页')
+  if (set.size === 0) throw new Error("Page range didn't match any pages")
   return set
 }
 
@@ -263,7 +263,7 @@ export async function mergePdfs(paths, onProgress) {
       src = await PDFDocument.load(bytes)
     } catch (e) {
       const name = path.split(/[/\\]/).pop()
-      throw new Error(`「${name}」是加密文件，请先用「解密」工具去除密码后再合并`)
+      throw new Error(`"${name}" is an encrypted file. Please use the "Unlock" tool to remove the password before merging.`)
     }
     const copied = await out.copyPages(src, src.getPageIndices())
     copied.forEach((p) => out.addPage(p))

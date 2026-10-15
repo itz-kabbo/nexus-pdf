@@ -1,8 +1,8 @@
 [package]
-name = "lightscroll"
+name = "nexus-pdf"
 version = "1.1.0"
-description = "轻卷 LightScroll - PDF 工具箱"
-authors = ["云中江树"]
+description = "Nexus PDF - PDF Toolbox"
+authors = ["Nexus Bench"]
 license = "MIT"
 repository = ""
 edition = "2021"

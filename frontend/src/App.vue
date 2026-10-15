@@ -18,14 +18,14 @@ import {
 } from './reader.js'
 
 const NAV = [
-  { id: 'read', name: '阅读', desc: '连续滚动浏览文档' },
-  { id: 'watermark', name: '加水印', desc: '文字或图片水印，图层与防删除栅格双模式' },
-  { id: 'pages', name: '页面管理', desc: '勾选页面后提取、删除或旋转，输出为新文件' },
-  { id: 'merge', name: '合并 PDF', desc: '多个 PDF 按顺序合成一个文件' },
-  { id: 'export', name: '转图片', desc: '把页面导出为 PNG 或 JPG 图片' },
-  { id: 'compress', name: '压缩 PDF', desc: '整页栅格化重建，大幅缩小扫描件体积' },
-  { id: 'protect', name: '加密', desc: '设置打开密码，可附加禁止打印、禁止复制的权限限制' },
-  { id: 'unlock', name: '解密', desc: '用已知密码打开后，输出一份无密码副本' },
+  { id: 'read', name: 'read', desc: 'Continuous scrolling document view' },
+  { id: 'watermark', name: 'Watermark', desc: 'Text or image watermark, dual layer and anti-deletion raster modes' },
+  { id: 'pages', name: 'Pages', desc: 'Extract, delete, or rotate selected pages, output as new file' },
+  { id: 'merge', name: 'Merge PDF', desc: 'Combine multiple PDFs into one sequentially' },
+  { id: 'export', name: 'Export', desc: 'Export pages as PNG or JPG images' },
+  { id: 'compress', name: 'Compress', desc: 'Full page rasterization to greatly reduce scanned file size' },
+  { id: 'protect', name: 'Protect', desc: 'Set open password, with optional restrictions on printing and copying' },
+  { id: 'unlock', name: 'Unlock', desc: 'Output a password-free copy after unlocking with known password' },
 ]
 
 const tool = ref('read')
@@ -38,7 +38,7 @@ const pwPrompt = reactive({ show: false, path: '', name: '', value: '', wrong: f
 
 // ---------- 打开文档 ----------
 async function pickAndOpen() {
-  const path = await openDialog({ multiple: false, title: '打开 PDF', filters: [{ name: 'PDF 文档', extensions: ['pdf'] }] })
+  const path = await openDialog({ multiple: false, title: 'Open PDF', filters: [{ name: 'PDF Document', extensions: ['pdf'] }] })
   if (typeof path === 'string') await loadDoc(path)
 }
 
@@ -46,7 +46,7 @@ async function loadDoc(path, password) {
   errorMsg.value = ''
   lastResult.value = null
   try {
-    busyStart('正在打开文档', 1)
+    busyStart('Opening document', 1)
     const { bytes, pdf } = await openPdf(path, password)
     pwPrompt.show = false
     pwPrompt.value = ''
@@ -111,7 +111,7 @@ async function loadDoc(path, password) {
       pwPrompt.wrong = !!password
       doc.value = null
     } else {
-      errorMsg.value = '打开失败：' + (e.message || e)
+      errorMsg.value = 'Failed to open: ' + (e.message || e)
     }
   } finally {
     busyEnd()
@@ -185,9 +185,9 @@ const readerRows = computed(() => {
 })
 const zoomPercent = computed(() => Math.round(pageScale(currentPage.value - 1) * 100))
 const zoomLabel = computed(() => ({
-  'fit-page': '适合页',
-  'fit-width': '适合宽度',
-  'fit-content': '适合内容',
+  'fit-page': 'Fit Page',
+  'fit-width': 'Fit Width',
+  'fit-content': 'Fit Content',
   custom: `${zoomPercent.value}%`,
 }[zoomMode.value]))
 const canNavigateBack = computed(() => navHistoryIndex.value > 0)
@@ -197,7 +197,7 @@ const currentPageLabel = computed(() => doc.value?.pageLabels?.[currentPage.valu
 function flattenOutline(items, level = 0, output = []) {
   for (const item of items) {
     output.push({
-      title: item.title || '未命名章节',
+      title: item.title || 'Unnamed chapter',
       dest: item.dest,
       url: item.url,
       level,
@@ -227,7 +227,7 @@ function restoreReaderState(path, viewerPrefs) {
   }
 
   try {
-    const saved = JSON.parse(localStorage.getItem(`lightscroll:reader:${path}`) || 'null')
+    const saved = JSON.parse(localStorage.getItem(`nexus-bench:reader:${path}`) || 'null')
     if (!saved) return null
     if (['single', 'facing', 'book'].includes(saved.layout)) pageLayout.value = saved.layout
     if (typeof saved.continuous === 'boolean') readerContinuous.value = saved.continuous
@@ -247,7 +247,7 @@ function saveReaderState() {
   const d = doc.value
   if (!d) return
   try {
-    localStorage.setItem(`lightscroll:reader:${d.path}`, JSON.stringify({
+    localStorage.setItem(`nexus-bench:reader:${d.path}`, JSON.stringify({
       page: currentPage.value,
       layout: pageLayout.value,
       continuous: readerContinuous.value,
@@ -519,7 +519,7 @@ async function renderAnnotationLinks(page, index, viewport, layer, version) {
       width: `${width}px`,
       height: `${height}px`,
     })
-    link.title = annotation.title || annotation.url || '跳转到文档内位置'
+    link.title = annotation.title || annotation.url || 'Jump to position in document'
     if (annotation.url) {
       link.href = annotation.url
       link.target = '_blank'
@@ -729,9 +729,9 @@ watch(rotation, async () => {
 })
 
 const findCounter = computed(() => {
-  if (findState.searching) return `${findState.pagesDone} / ${doc.value?.pageCount || 0} 页`
+  if (findState.searching) return `${findState.pagesDone} / ${doc.value?.pageCount || 0} Pages`
   if (!findState.query.trim()) return ''
-  if (!findState.results.length) return '无结果'
+  if (!findState.results.length) return 'No results'
   return `${findState.active + 1} / ${findState.results.length}`
 })
 
@@ -1201,7 +1201,7 @@ function selectAll(flag) {
 // ---------- 水印设置与实时预览 ----------
 const wm = reactive({
   type: 'text',
-  text: '内部资料 请勿外传',
+  text: 'Internal Document - Do Not Distribute',
   imagePath: '',
   color: 'gray',
   sizePct: 5,
@@ -1217,7 +1217,7 @@ let wmImageBitmap = null
 const previewUrl = ref('')
 
 async function pickWmImage() {
-  const path = await openDialog({ multiple: false, title: '选择水印图片', filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+  const path = await openDialog({ multiple: false, title: 'Select watermark image', filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
   if (typeof path !== 'string') return
   wm.imagePath = path
   const bytes = await readFile(path)
@@ -1249,7 +1249,7 @@ watch(wm, refreshPreview)
 const mergeList = ref([])
 
 async function addMergeFiles() {
-  const paths = await openDialog({ multiple: true, title: '添加 PDF', filters: [{ name: 'PDF 文档', extensions: ['pdf'] }] })
+  const paths = await openDialog({ multiple: true, title: 'Add PDF', filters: [{ name: 'PDF Document', extensions: ['pdf'] }] })
   if (!paths) return
   for (const p of Array.isArray(paths) ? paths : [paths]) {
     if (!mergeList.value.some((x) => x.path === p)) {
@@ -1274,13 +1274,13 @@ const prot = reactive({ pw: '', pw2: '', noPrint: false, noCopy: false })
 async function applyProtect() {
   await runTask(async () => {
     const d = doc.value
-    if (!prot.pw) throw new Error('请输入打开密码')
-    if (prot.pw !== prot.pw2) throw new Error('两次输入的密码不一致')
-    busyStart('加密文档', 1)
+    if (!prot.pw) throw new Error('Please enter open password')
+    if (prot.pw !== prot.pw2) throw new Error('Passwords do not match')
+    busyStart('Encrypting document', 1)
     const bytes = await encryptPdf(d.bytes, prot.pw, { noPrint: prot.noPrint, noCopy: prot.noCopy }, d.password)
-    const out = await outputPath(d.path, '_加密')
+    const out = await outputPath(d.path, '_encrypted')
     const size = await saveBytes(out, bytes)
-    lastResult.value = { label: '已加密，请妥善保管密码', path: out, extra: fmtSize(size) }
+    lastResult.value = { label: 'Encrypted, please keep the password safe', path: out, extra: fmtSize(size) }
     prot.pw = ''
     prot.pw2 = ''
   })
@@ -1289,12 +1289,12 @@ async function applyProtect() {
 async function applyUnlock() {
   await runTask(async () => {
     const d = doc.value
-    if (!d.password) throw new Error('当前文档没有打开密码，无需解密')
-    busyStart('移除密码', 1)
+    if (!d.password) throw new Error('Document has no open password, decryption not needed')
+    busyStart('Removing password', 1)
     const bytes = await decryptPdf(d.bytes, d.password)
-    const out = await outputPath(d.path, '_解密')
+    const out = await outputPath(d.path, '_decrypted')
     const size = await saveBytes(out, bytes)
-    lastResult.value = { label: '已输出无密码副本', path: out, extra: fmtSize(size) }
+    lastResult.value = { label: 'Output password-free copy', path: out, extra: fmtSize(size) }
   })
 }
 
@@ -1326,19 +1326,19 @@ const fmtSize = (b) => (!b ? '-' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + '
 async function applyWatermark() {
   await runTask(async () => {
     const d = doc.value
-    if (wm.type === 'text' && !wm.text.trim()) throw new Error('请输入水印文字')
-    if (wm.type === 'image' && !wmImageBitmap) throw new Error('请先选择水印图片')
+    if (wm.type === 'text' && !wm.text.trim()) throw new Error('Please enter watermark text')
+    if (wm.type === 'image' && !wmImageBitmap) throw new Error('Please select a watermark image first')
     const range = parseRange(wm.range, d.pageCount)
     const opts = { ...wm, imageBitmap: wmImageBitmap }
-    busyStart(wm.mode === 'layer' ? '添加图层水印' : '栅格化重建(无法移除的水印)', range.size)
+    busyStart(wm.mode === 'layer' ? 'Adding layer watermark' : 'Rasterizing (unremovable watermark)', range.size)
     const onP = (n) => (busy.done = n)
     const bytes =
       wm.mode === 'layer'
         ? await watermarkLayer(d.bytes, d.pdf, range, opts, onP, d.password)
         : await watermarkRaster(d.bytes, d.pdf, range, opts, wm.dpi, 0.86, onP, d.password)
-    const out = await outputPath(d.path, '_水印')
+    const out = await outputPath(d.path, '_watermarked')
     const size = await saveBytes(out, bytes)
-    lastResult.value = { label: '水印已添加', path: out, extra: fmtSize(size) }
+    lastResult.value = { label: 'Watermark added', path: out, extra: fmtSize(size) }
   })
 }
 
@@ -1346,35 +1346,35 @@ async function applyPages(action) {
   await runTask(async () => {
     const d = doc.value
     const sel = selected.value
-    if (sel.size === 0) throw new Error('先在缩略图上勾选页面')
-    busyStart('处理页面', 1)
+    if (sel.size === 0) throw new Error('Select pages in thumbnails first')
+    busyStart('Processing pages', 1)
     let bytes, suffix
     if (action === 'extract') {
       bytes = await extractPages(d.bytes, sel, d.password)
-      suffix = '_提取'
+      suffix = '_extracted'
     } else if (action === 'delete') {
-      if (sel.size >= d.pageCount) throw new Error('不能删除全部页面')
+      if (sel.size >= d.pageCount) throw new Error('Cannot delete all pages')
       const keep = new Set(Array.from({ length: d.pageCount }, (_, i) => i).filter((i) => !sel.has(i)))
       bytes = await extractPages(d.bytes, keep, d.password)
-      suffix = '_删页'
+      suffix = '_deleted'
     } else {
       bytes = await rotatePages(d.bytes, sel, 90, d.password)
-      suffix = '_旋转'
+      suffix = '_rotated'
     }
     const out = await outputPath(d.path, suffix)
     const size = await saveBytes(out, bytes)
-    lastResult.value = { label: '已输出新文件', path: out, extra: fmtSize(size) }
+    lastResult.value = { label: 'New file exported', path: out, extra: fmtSize(size) }
   })
 }
 
 async function applyMerge() {
   await runTask(async () => {
-    if (mergeList.value.length < 2) throw new Error('至少需要两个 PDF 才能合并')
-    busyStart('合并文档', mergeList.value.length)
+    if (mergeList.value.length < 2) throw new Error('At least two PDFs are required to merge')
+    busyStart('Merging documents', mergeList.value.length)
     const bytes = await mergePdfs(mergeList.value.map((x) => x.path), (n) => (busy.done = n))
-    const out = await outputPath(mergeList.value[0].path, '_合并')
+    const out = await outputPath(mergeList.value[0].path, '_merged')
     const size = await saveBytes(out, bytes)
-    lastResult.value = { label: `已合并 ${mergeList.value.length} 个文档`, path: out, extra: fmtSize(size) }
+    lastResult.value = { label: `Merged ${mergeList.value.length} documents`, path: out, extra: fmtSize(size) }
   })
 }
 
@@ -1382,22 +1382,22 @@ async function applyExport() {
   await runTask(async () => {
     const d = doc.value
     const range = parseRange(exp.range, d.pageCount)
-    busyStart('导出图片', range.size)
+    busyStart('Exporting images', range.size)
     const outs = await exportImages(d.pdf, range, exp.dpi, exp.format, 0.9, d.path, (n) => (busy.done = n))
-    lastResult.value = { label: `已导出 ${outs.length} 张图片`, path: outs[0], extra: '' }
+    lastResult.value = { label: `Exported ${outs.length} images`, path: outs[0], extra: '' }
   })
 }
 
 async function applyCompress() {
   await runTask(async () => {
     const d = doc.value
-    busyStart('栅格化压缩', d.pageCount)
+    busyStart('Rasterization compression', d.pageCount)
     const bytes = await compressPdf(d.pdf, cmp.dpi, cmp.quality, (n) => (busy.done = n))
-    const out = await outputPath(d.path, '_压缩')
+    const out = await outputPath(d.path, '_compressed')
     const size = await saveBytes(out, bytes)
     const pct = Math.round((1 - size / d.size) * 100)
     lastResult.value = {
-      label: pct > 0 ? `压缩完成，瘦身 ${pct}%` : '压缩完成(原文件已很紧凑)',
+      label: pct > 0 ? `Compression completed, reduced by ${pct}%` : 'Compression completed (original file is already compact)',
       path: out,
       extra: `${fmtSize(d.size)} → ${fmtSize(size)}`,
     }
@@ -1413,7 +1413,7 @@ const DEMO = new URLSearchParams(location.search).get('demo')
 async function seedDemo(t) {
   if (t === 'pwcard') {
     pwPrompt.show = true
-    pwPrompt.name = '董事会纪要-机密.pdf'
+    pwPrompt.name = 'Board_Minutes-Confidential.pdf'
     return
   }
   const res = await fetch('/demo.pdf')
@@ -1425,7 +1425,7 @@ async function seedDemo(t) {
     sizes.push({ w: vp.width, h: vp.height })
   }
   doc.value = {
-    path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf',
+    path: '/demo/Product_Whitepaper-2026.pdf', name: 'Product_Whitepaper-2026.pdf',
     size: 2836582, bytes, pdf, pageCount: pdf.numPages, sizes,
     pageLabels: await pdf.getPageLabels().catch(() => null), password: '',
   }
@@ -1435,9 +1435,9 @@ async function seedDemo(t) {
   navHistory.value = [1]
   navHistoryIndex.value = 0
   mergeList.value = [
-    { path: '/demo/产品白皮书-2026.pdf', name: '产品白皮书-2026.pdf' },
-    { path: '/demo/附录A-财务数据.pdf', name: '附录A-财务数据.pdf' },
-    { path: '/demo/附录B-用户调研.pdf', name: '附录B-用户调研.pdf' },
+    { path: '/demo/Product_Whitepaper-2026.pdf', name: 'Product_Whitepaper-2026.pdf' },
+    { path: '/demo/Appendix_A-Financials.pdf', name: 'Appendix_A-Financials.pdf' },
+    { path: '/demo/Appendix_B-User_Research.pdf', name: 'Appendix_B-User_Research.pdf' },
   ]
   if (t && t !== 'read') tool.value = t
   if (t === 'pages') selected.value = new Set([1, 3, 4])
@@ -1529,13 +1529,13 @@ const toolMeta = computed(() => NAV.find((n) => n.id === tool.value))
 // 未打开文档时, 各工具的空状态文案
 const emptyCopy = computed(() => {
   const map = {
-    read: '拖入 PDF 文件，或点击打开',
-    watermark: '拖入要加水印的 PDF，或点击打开',
-    pages: '拖入 PDF，开始管理页面',
-    export: '拖入 PDF，导出为图片',
-    compress: '拖入要压缩的 PDF',
-    protect: '拖入要加密的 PDF',
-    unlock: '拖入要解密的 PDF（需要知道它的密码）',
+    read: 'Drag and drop a PDF file, or click to open',
+    watermark: 'Drag PDF here to add watermark, or click to open',
+    pages: 'Drag PDF here to manage pages',
+    export: 'Drag PDF here to export as images',
+    compress: 'Drag PDF here to compress',
+    protect: 'Drag PDF here to encrypt',
+    unlock: 'Drag PDF here to decrypt (requires password)',
   }
   return map[tool.value] || map.read
 })
@@ -1548,8 +1548,8 @@ const emptyCopy = computed(() => {
       <div class="brand">
         <span class="brand-logo" v-html="ICONS.brand"></span>
         <div>
-          <div class="brand-name">轻卷</div>
-          <div class="brand-sub">LightScroll</div>
+          <div class="brand-name">Nexus PDF</div>
+          <div class="brand-sub">Nexus PDF</div>
         </div>
       </div>
 
@@ -1567,8 +1567,8 @@ const emptyCopy = computed(() => {
       </nav>
 
       <div class="sidebar-foot">
-        <div>云中江树</div>
-        <div class="sidebar-foot-sub">微信公众号「云中江树」</div>
+        <div>Nexus PDF</div>
+        <div class="sidebar-foot-sub">Nexus PDF</div>
       </div>
     </aside>
 
@@ -1579,7 +1579,7 @@ const emptyCopy = computed(() => {
         <span class="badge success">{{ lastResult.label }}</span>
         <span class="result-name">{{ lastResult.path.split(/[/\\]/).pop() }}</span>
         <span class="result-extra">{{ lastResult.extra }}</span>
-        <button class="btn ghost small" @click="revealFile(lastResult.path)">显示文件</button>
+        <button class="btn ghost small" @click="revealFile(lastResult.path)">Show File</button>
       </div>
 
       <!-- 未打开文档 -->
@@ -1587,29 +1587,29 @@ const emptyCopy = computed(() => {
         <!-- 加密文档: 密码输入 -->
         <div v-if="pwPrompt.show" class="pw-card">
           <span class="dropzone-icon pw-icon" v-html="ICONS.lock"></span>
-          <div class="pw-title">「{{ pwPrompt.name }}」有密码保护</div>
+          <div class="pw-title">'{{ pwPrompt.name }}' is password protected</div>
           <div class="pw-hint" :class="{ wrong: pwPrompt.wrong }">
-            {{ pwPrompt.wrong ? '密码不对，再试一次' : '输入打开密码继续' }}
+            {{ pwPrompt.wrong ? 'Incorrect password, please try again' : 'Enter password to continue' }}
           </div>
           <input
             class="tinput"
             type="password"
             v-model="pwPrompt.value"
-            placeholder="打开密码"
+            placeholder="Open Password"
             @keyup.enter="submitPassword"
             autofocus
           />
           <div class="pw-actions">
-            <button class="btn ghost" @click="pwPrompt.show = false">取消</button>
-            <button class="btn primary" :disabled="!pwPrompt.value" @click="submitPassword">解锁打开</button>
+            <button class="btn ghost" @click="pwPrompt.show = false">Cancel</button>
+            <button class="btn primary" :disabled="!pwPrompt.value" @click="submitPassword">Unlock</button>
           </div>
         </div>
 
         <!-- 合并不需要先开文档: 直接给独立工作区 -->
         <div v-else-if="tool === 'merge'" class="merge-standalone">
           <div class="panel-head">
-            <h2>合并 PDF</h2>
-            <p>把多个 PDF 按顺序合成一个文件，拖进窗口或点击添加</p>
+            <h2>Merge PDF</h2>
+            <p>Combine multiple PDFs sequentially into one file, drag into window or click to add</p>
           </div>
           <div class="merge-list" v-if="mergeList.length">
             <div v-for="(m, i) in mergeList" :key="m.path" class="merge-item">
@@ -1621,10 +1621,10 @@ const emptyCopy = computed(() => {
             </div>
           </div>
           <button class="btn ghost wide" @click="addMergeFiles">
-            <span class="btn-icon" v-html="ICONS.plus"></span>添加 PDF
+            <span class="btn-icon" v-html="ICONS.plus"></span>Add PDF
           </button>
           <button class="btn primary wide" :disabled="mergeList.length < 2" @click="applyMerge">
-            合并 {{ mergeList.length }} 个文档
+            Merge {{ mergeList.length }} documents
           </button>
         </div>
 
@@ -1632,7 +1632,7 @@ const emptyCopy = computed(() => {
         <div v-else class="dropzone" @click="pickAndOpen">
           <span class="dropzone-icon" v-html="ICONS[{ read: 'read', pages: 'pages', export: 'image', compress: 'compress', protect: 'lock', unlock: 'unlock' }[tool] || 'watermark']"></span>
           <div class="dropzone-title">{{ emptyCopy }}</div>
-          <div class="dropzone-hint">阅读 · 加水印(图层/防删除) · 页面管理 · 合并 · 转图片 · 压缩 — 全部本地完成</div>
+          <div class="dropzone-hint">Read · Watermark (Layer/Raster) · Pages · Merge · Export · Compress — All done locally</div>
         </div>
       </div>
 
@@ -1642,8 +1642,8 @@ const emptyCopy = computed(() => {
           <div class="doc-info">
             <div class="doc-name" :title="doc.path">{{ doc.name }}</div>
             <div class="doc-meta">
-              {{ doc.pageCount }} 页 · {{ fmtSize(doc.size) }}
-              <template v-if="tool === 'read'"> · 当前 {{ currentPageLabel }}</template>
+              {{ doc.pageCount }} Pages · {{ fmtSize(doc.size) }}
+              <template v-if="tool === 'read'"> · Current {{ currentPageLabel }}</template>
             </div>
           </div>
           <div v-if="tool !== 'read'" class="topbar-mid">
@@ -1652,12 +1652,12 @@ const emptyCopy = computed(() => {
               <button class="zbtn" @click="zoomBy(-1)">−</button>
               <span class="zval">{{ Math.round(zoom * 100) }}%</span>
               <button class="zbtn" @click="zoomBy(1)">+</button>
-              <button class="zbtn fit" @click="zoomFit">适宽</button>
+              <button class="zbtn fit" @click="zoomFit">Fit Width</button>
             </div>
           </div>
           <div class="topbar-actions">
-            <button class="btn ghost" @click="pickAndOpen">换文档</button>
-            <button class="btn ghost quiet" @click="closeDoc" title="关闭">
+            <button class="btn ghost" @click="pickAndOpen">Switch Document</button>
+            <button class="btn ghost quiet" @click="closeDoc" title="Close">
               <span class="btn-icon" v-html="ICONS.close"></span>
             </button>
           </div>
@@ -1669,7 +1669,7 @@ const emptyCopy = computed(() => {
             <button
               class="toolbtn"
               :class="{ active: readerSidebar === 'outline' }"
-              title="显示/隐藏目录 (F12)"
+              title="Show/Hide Outline (F12)"
               @click="readerSidebar = readerSidebar === 'outline' ? 'none' : 'outline'"
             >
               <span v-html="ICONS.outline"></span>
@@ -1677,7 +1677,7 @@ const emptyCopy = computed(() => {
             <button
               class="toolbtn"
               :class="{ active: readerSidebar === 'thumbs' }"
-              title="显示/隐藏缩略图"
+              title="Show/Hide Thumbnails"
               @click="readerSidebar = readerSidebar === 'thumbs' ? 'none' : 'thumbs'"
             >
               <span v-html="ICONS.thumbnails"></span>
@@ -1685,35 +1685,35 @@ const emptyCopy = computed(() => {
           </div>
 
           <div class="readerbar-group">
-            <button class="toolbtn" :disabled="!canNavigateBack" title="后退 (⌥←)" @click="navigateHistory(-1)">
+            <button class="toolbtn" :disabled="!canNavigateBack" title="Back (⌥←)" @click="navigateHistory(-1)">
               <span v-html="ICONS.back"></span>
             </button>
-            <button class="toolbtn" :disabled="!canNavigateForward" title="前进 (⌥→)" @click="navigateHistory(1)">
+            <button class="toolbtn" :disabled="!canNavigateForward" title="Forward (⌥→)" @click="navigateHistory(1)">
               <span v-html="ICONS.forward"></span>
             </button>
           </div>
 
           <div class="readerbar-group page-jump">
-            <button class="toolbtn" title="上一页 (Page Up)" @click="navigateRelative(-1)">
+            <button class="toolbtn" title="Previous Page (Page Up)" @click="navigateRelative(-1)">
               <span v-html="ICONS.chevronLeft"></span>
             </button>
             <input
               ref="pageInputEl"
               v-model="pageField"
               class="page-input"
-              aria-label="页码"
+              aria-label="Page Number"
               @focus="$event.target.select()"
               @keydown.enter.prevent="submitPageField"
               @blur="pageField = String(currentPage)"
             />
             <span class="page-total">/ {{ doc.pageCount }}</span>
-            <button class="toolbtn" title="下一页 (Page Down)" @click="navigateRelative(1)">
+            <button class="toolbtn" title="Next Page (Page Down)" @click="navigateRelative(1)">
               <span v-html="ICONS.chevronRight"></span>
             </button>
           </div>
 
           <div class="readerbar-group zoom-group">
-            <button class="toolbtn" title="缩小 (−)" @click="zoomBy(-1)">
+            <button class="toolbtn" title="Zoom Out (−)" @click="zoomBy(-1)">
               <span v-html="ICONS.minus"></span>
             </button>
             <select
@@ -1722,43 +1722,43 @@ const emptyCopy = computed(() => {
               :title="`${zoomLabel} · ${zoomPercent}%`"
               @change="setZoomMode($event.target.value)"
             >
-              <option value="fit-page">适合页</option>
-              <option value="fit-width">适合宽度</option>
-              <option value="fit-content">适合内容</option>
+              <option value="fit-page">Fit Page</option>
+              <option value="fit-width">Fit Width</option>
+              <option value="fit-content">Fit Content</option>
               <option value="custom">{{ zoomPercent }}%</option>
             </select>
-            <button class="toolbtn" title="放大 (+)" @click="zoomBy(1)">
+            <button class="toolbtn" title="Zoom In (+)" @click="zoomBy(1)">
               <span v-html="ICONS.plus"></span>
             </button>
           </div>
 
           <div class="readerbar-group">
-            <button class="toolbtn" :class="{ active: pageLayout === 'single' }" title="单页 (⌘6)" @click="pageLayout = 'single'">
+            <button class="toolbtn" :class="{ active: pageLayout === 'single' }" title="Single Page (⌘6)" @click="pageLayout = 'single'">
               <span v-html="ICONS.singlePage"></span>
             </button>
-            <button class="toolbtn" :class="{ active: pageLayout === 'facing' }" title="对开 (⌘7)" @click="pageLayout = 'facing'">
+            <button class="toolbtn" :class="{ active: pageLayout === 'facing' }" title="Facing (⌘7)" @click="pageLayout = 'facing'">
               <span v-html="ICONS.facing"></span>
             </button>
-            <button class="toolbtn" :class="{ active: pageLayout === 'book' }" title="书籍视图 (⌘8)" @click="pageLayout = 'book'">
+            <button class="toolbtn" :class="{ active: pageLayout === 'book' }" title="Book View (⌘8)" @click="pageLayout = 'book'">
               <span v-html="ICONS.book"></span>
             </button>
-            <button class="toolbtn" :class="{ active: readerContinuous }" title="连续模式 (C)" @click="readerContinuous = !readerContinuous">
+            <button class="toolbtn" :class="{ active: readerContinuous }" title="Continuous Mode (C)" @click="readerContinuous = !readerContinuous">
               <span v-html="ICONS.continuous"></span>
             </button>
           </div>
 
           <div class="readerbar-spacer"></div>
           <div class="readerbar-group">
-            <button class="toolbtn" title="向左旋转 ([)" @click="rotation = (rotation + 270) % 360">
+            <button class="toolbtn" title="Rotate Left ([)" @click="rotation = (rotation + 270) % 360">
               <span v-html="ICONS.rotateLeft"></span>
             </button>
-            <button class="toolbtn" title="向右旋转 (])" @click="rotation = (rotation + 90) % 360">
+            <button class="toolbtn" title="Rotate Right (])" @click="rotation = (rotation + 90) % 360">
               <span v-html="ICONS.rotateRight"></span>
             </button>
-            <button class="toolbtn" title="查找 (⌘F)" @click="openFind">
+            <button class="toolbtn" title="Find (⌘F)" @click="openFind">
               <span v-html="ICONS.search"></span>
             </button>
-            <button class="toolbtn" title="全屏 (F11)" @click="toggleFullscreen()">
+            <button class="toolbtn" title="Fullscreen (F11)" @click="toggleFullscreen()">
               <span v-html="ICONS.fullscreen"></span>
             </button>
           </div>
@@ -1768,9 +1768,9 @@ const emptyCopy = computed(() => {
           <!-- 阅读目录 / 缩略图侧栏 -->
           <aside v-if="tool === 'read' && readerSidebar !== 'none'" class="reader-side">
             <div class="reader-side-head">
-              <button :class="{ active: readerSidebar === 'outline' }" @click="readerSidebar = 'outline'">目录</button>
-              <button :class="{ active: readerSidebar === 'thumbs' }" @click="readerSidebar = 'thumbs'">缩略图</button>
-              <button class="reader-side-close" title="关闭侧栏" @click="readerSidebar = 'none'">×</button>
+              <button :class="{ active: readerSidebar === 'outline' }" @click="readerSidebar = 'outline'">Outline</button>
+              <button :class="{ active: readerSidebar === 'thumbs' }" @click="readerSidebar = 'thumbs'">Thumbnails</button>
+              <button class="reader-side-close" title="Close Sidebar" @click="readerSidebar = 'none'">×</button>
             </div>
             <div ref="readerSidebarEl" class="reader-side-body">
               <template v-if="readerSidebar === 'outline'">
@@ -1785,7 +1785,7 @@ const emptyCopy = computed(() => {
                 >
                   {{ item.title }}
                 </button>
-                <div v-if="!outlineItems.length" class="side-empty">本文档没有目录</div>
+                <div v-if="!outlineItems.length" class="side-empty">This document has no outline</div>
               </template>
               <template v-else>
                 <button
@@ -1811,14 +1811,14 @@ const emptyCopy = computed(() => {
             <input
               ref="findInputEl"
               v-model="findState.query"
-              placeholder="在文档中查找"
+              placeholder="Find in document"
               spellcheck="false"
               @keydown.enter.prevent="findNext($event.shiftKey ? -1 : 1)"
             />
             <span class="find-count">{{ findCounter }}</span>
-            <button title="上一个 (⇧F3)" @click="findNext(-1)" v-html="ICONS.chevronUp"></button>
-            <button title="下一个 (F3)" @click="findNext(1)" v-html="ICONS.chevronDown"></button>
-            <button title="关闭 (Esc)" @click="closeFind" v-html="ICONS.close"></button>
+            <button title="Previous (⇧F3)" @click="findNext(-1)" v-html="ICONS.chevronUp"></button>
+            <button title="Next (F3)" @click="findNext(1)" v-html="ICONS.chevronDown"></button>
+            <button title="Close (Esc)" @click="closeFind" v-html="ICONS.close"></button>
           </div>
 
           <!-- 阅读区 / 缩略图区 -->
@@ -1895,89 +1895,89 @@ const emptyCopy = computed(() => {
             <!-- 水印 -->
             <template v-if="tool === 'watermark'">
               <div class="field">
-                <div class="field-label">水印类型</div>
+                <div class="field-label">Watermark Type</div>
                 <div class="segmented">
-                  <button :class="{ active: wm.type === 'text' }" @click="wm.type = 'text'">文字</button>
-                  <button :class="{ active: wm.type === 'image' }" @click="wm.type = 'image'">图片</button>
+                  <button :class="{ active: wm.type === 'text' }" @click="wm.type = 'text'">Text</button>
+                  <button :class="{ active: wm.type === 'image' }" @click="wm.type = 'image'">Image</button>
                 </div>
               </div>
               <div class="field" v-if="wm.type === 'text'">
-                <div class="field-label">水印文字</div>
-                <input class="tinput" v-model="wm.text" placeholder="内部资料 请勿外传" spellcheck="false" />
+                <div class="field-label">Watermark Text</div>
+                <input class="tinput" v-model="wm.text" placeholder="Internal Document - Do Not Distribute" spellcheck="false" />
               </div>
               <div class="field" v-else>
-                <div class="field-label">水印图片</div>
+                <div class="field-label">Watermark Image</div>
                 <div class="file-row">
-                  <button class="btn ghost small" @click="pickWmImage">选择图片</button>
-                  <span class="file-name" :class="{ empty: !wm.imagePath }">{{ wm.imagePath ? wm.imagePath.split(/[/\\]/).pop() : '未选择' }}</span>
+                  <button class="btn ghost small" @click="pickWmImage">Select Image</button>
+                  <span class="file-name" :class="{ empty: !wm.imagePath }">{{ wm.imagePath ? wm.imagePath.split(/[/\\]/).pop() : 'Not Selected' }}</span>
                 </div>
               </div>
               <div class="field" v-if="wm.type === 'text'">
-                <div class="field-label">颜色</div>
+                <div class="field-label">Color</div>
                 <div class="segmented">
-                  <button v-for="c in [['gray', '灰'], ['red', '红'], ['blue', '蓝'], ['black', '黑']]" :key="c[0]" :class="{ active: wm.color === c[0] }" @click="wm.color = c[0]">{{ c[1] }}</button>
+                  <button v-for="c in [['gray', 'Gray'], ['red', 'Red'], ['blue', 'Blue'], ['black', 'Black']]" :key="c[0]" :class="{ active: wm.color === c[0] }" @click="wm.color = c[0]">{{ c[1] }}</button>
                 </div>
               </div>
               <div class="field">
-                <div class="field-label">大小 {{ wm.sizePct }}%</div>
+                <div class="field-label">Size {{ wm.sizePct }}%</div>
                 <input type="range" min="2" max="30" v-model.number="wm.sizePct" />
               </div>
               <div class="field">
-                <div class="field-label">不透明度 {{ wm.opacity }}%</div>
+                <div class="field-label">Opacity {{ wm.opacity }}%</div>
                 <input type="range" min="5" max="80" v-model.number="wm.opacity" />
               </div>
               <div class="field">
-                <div class="field-label">角度 {{ wm.angle }}°</div>
+                <div class="field-label">Angle {{ wm.angle }}°</div>
                 <input type="range" min="-90" max="90" step="15" v-model.number="wm.angle" />
               </div>
               <div class="field">
-                <div class="field-label">布局</div>
+                <div class="field-label">Layout</div>
                 <div class="segmented">
-                  <button :class="{ active: wm.tile }" @click="wm.tile = true">平铺</button>
-                  <button :class="{ active: !wm.tile }" @click="wm.tile = false">居中单个</button>
+                  <button :class="{ active: wm.tile }" @click="wm.tile = true">Tile</button>
+                  <button :class="{ active: !wm.tile }" @click="wm.tile = false">Center Single</button>
                 </div>
               </div>
               <div class="field" v-if="wm.tile">
-                <div class="field-label">密度</div>
+                <div class="field-label">Density</div>
                 <div class="segmented">
-                  <button v-for="x in [['sparse', '疏'], ['normal', '中'], ['dense', '密']]" :key="x[0]" :class="{ active: wm.density === x[0] }" @click="wm.density = x[0]">{{ x[1] }}</button>
+                  <button v-for="x in [['sparse', 'Sparse'], ['normal', 'Normal'], ['dense', 'Dense']]" :key="x[0]" :class="{ active: wm.density === x[0] }" @click="wm.density = x[0]">{{ x[1] }}</button>
                 </div>
               </div>
               <div class="field">
-                <div class="field-label">模式</div>
+                <div class="field-label">Mode</div>
                 <div class="segmented">
-                  <button :class="{ active: wm.mode === 'layer' }" @click="wm.mode = 'layer'">图层</button>
-                  <button :class="{ active: wm.mode === 'raster' }" @click="wm.mode = 'raster'">防删除</button>
+                  <button :class="{ active: wm.mode === 'layer' }" @click="wm.mode = 'layer'">Layer</button>
+                  <button :class="{ active: wm.mode === 'raster' }" @click="wm.mode = 'raster'">Anti-deletion</button>
                 </div>
-                <div class="field-hint">{{ wm.mode === 'layer' ? '水印作为图层叠加，文件几乎不变大，文字仍可复制' : '整页栅格化，水印融进像素无法移除；文字不可选、文件变大' }}</div>
+                <div class="field-hint">{{ wm.mode === 'layer' ? 'Watermark is superimposed as a layer, file size barely increases, text remains copyable' : 'Full page rasterized, watermark merged into pixels and cannot be removed; text becomes unselectable, file size increases' }}</div>
               </div>
               <div class="field" v-if="wm.mode === 'raster'">
-                <div class="field-label">清晰度</div>
+                <div class="field-label">Resolution</div>
                 <div class="segmented">
                   <button v-for="d in [150, 200, 300]" :key="d" :class="{ active: wm.dpi === d }" @click="wm.dpi = d">{{ d }} DPI</button>
                 </div>
               </div>
               <div class="field">
-                <div class="field-label">页码范围</div>
-                <input class="tinput" v-model.trim="wm.range" placeholder="全部页 (如 1-3,5)" spellcheck="false" />
+                <div class="field-label">Page Range</div>
+                <input class="tinput" v-model.trim="wm.range" placeholder="All pages (e.g. 1-3,5)" spellcheck="false" />
               </div>
-              <button class="btn primary wide" @click="applyWatermark">添加水印</button>
+              <button class="btn primary wide" @click="applyWatermark">Add Watermark</button>
             </template>
 
             <!-- 页面管理 -->
             <template v-else-if="tool === 'pages'">
               <div class="field">
-                <div class="field-label">已选 {{ selected.size }} / {{ doc.pageCount }} 页</div>
+                <div class="field-label">Selected {{ selected.size }} / {{ doc.pageCount }} Pages</div>
                 <div class="segmented">
-                  <button @click="selectAll(true)">全选</button>
-                  <button @click="selectAll(false)">清空</button>
+                  <button @click="selectAll(true)">Select All</button>
+                  <button @click="selectAll(false)">Clear</button>
                 </div>
-                <div class="field-hint">点击左侧缩略图勾选页面</div>
+                <div class="field-hint">Click left thumbnails to check pages</div>
               </div>
-              <button class="btn primary wide" @click="applyPages('extract')">提取所选 → 新 PDF</button>
-              <button class="btn ghost wide" @click="applyPages('delete')">删除所选 → 新 PDF</button>
-              <button class="btn ghost wide" @click="applyPages('rotate')">所选旋转 90°</button>
-              <div class="field-hint pad-top">所有操作输出新文件，不改动原文档</div>
+              <button class="btn primary wide" @click="applyPages('extract')">Extract selected → New PDF</button>
+              <button class="btn ghost wide" @click="applyPages('delete')">Delete selected → New PDF</button>
+              <button class="btn ghost wide" @click="applyPages('rotate')">Rotate selected 90°</button>
+              <div class="field-hint pad-top">All operations output to a new file, the original document is untouched</div>
             </template>
 
             <!-- 合并 -->
@@ -1992,79 +1992,79 @@ const emptyCopy = computed(() => {
                 </div>
               </div>
               <button class="btn ghost wide" @click="addMergeFiles">
-                <span class="btn-icon" v-html="ICONS.plus"></span>添加 PDF
+                <span class="btn-icon" v-html="ICONS.plus"></span>Add PDF
               </button>
-              <button class="btn primary wide" @click="applyMerge">合并 {{ mergeList.length }} 个文档</button>
-              <div class="field-hint pad-top">也可以直接把 PDF 拖进窗口加入列表</div>
+              <button class="btn primary wide" @click="applyMerge">Merge {{ mergeList.length }} documents</button>
+              <div class="field-hint pad-top">You can also drag PDFs directly into the window to add them to the list</div>
             </template>
 
             <!-- 转图片 -->
             <template v-else-if="tool === 'export'">
               <div class="field">
-                <div class="field-label">图片格式</div>
+                <div class="field-label">Image Format</div>
                 <div class="segmented">
                   <button :class="{ active: exp.format === 'png' }" @click="exp.format = 'png'">PNG</button>
                   <button :class="{ active: exp.format === 'jpg' }" @click="exp.format = 'jpg'">JPG</button>
                 </div>
               </div>
               <div class="field">
-                <div class="field-label">清晰度</div>
+                <div class="field-label">Resolution</div>
                 <div class="segmented">
                   <button v-for="d in [150, 200, 300]" :key="d" :class="{ active: exp.dpi === d }" @click="exp.dpi = d">{{ d }} DPI</button>
                 </div>
               </div>
               <div class="field">
-                <div class="field-label">页码范围</div>
-                <input class="tinput" v-model.trim="exp.range" placeholder="全部页 (如 1-3,5)" spellcheck="false" />
+                <div class="field-label">Page Range</div>
+                <input class="tinput" v-model.trim="exp.range" placeholder="All pages (e.g. 1-3,5)" spellcheck="false" />
               </div>
-              <button class="btn primary wide" @click="applyExport">导出图片</button>
-              <div class="field-hint pad-top">图片保存在原文档旁边，按页码编号</div>
+              <button class="btn primary wide" @click="applyExport">Export Images</button>
+              <div class="field-hint pad-top">Images are saved next to the original document, numbered by page</div>
             </template>
 
             <!-- 加密 -->
             <template v-else-if="tool === 'protect'">
               <div class="field">
-                <div class="field-label">打开密码</div>
-                <input class="tinput" type="password" v-model="prot.pw" placeholder="设置打开密码" />
+                <div class="field-label">Open Password</div>
+                <input class="tinput" type="password" v-model="prot.pw" placeholder="Set Open Password" />
               </div>
               <div class="field">
-                <div class="field-label">确认密码</div>
-                <input class="tinput" type="password" v-model="prot.pw2" placeholder="再输一遍" @keyup.enter="applyProtect" />
+                <div class="field-label">Confirm Password</div>
+                <input class="tinput" type="password" v-model="prot.pw2" placeholder="Enter again" @keyup.enter="applyProtect" />
               </div>
               <div class="field">
-                <div class="field-label">权限限制</div>
+                <div class="field-label">Permission Restrictions</div>
                 <div class="segmented">
-                  <button :class="{ active: prot.noPrint }" @click="prot.noPrint = !prot.noPrint">禁止打印</button>
-                  <button :class="{ active: prot.noCopy }" @click="prot.noCopy = !prot.noCopy">禁止复制</button>
+                  <button :class="{ active: prot.noPrint }" @click="prot.noPrint = !prot.noPrint">Disable Printing</button>
+                  <button :class="{ active: prot.noCopy }" @click="prot.noCopy = !prot.noCopy">Disable Copying</button>
                 </div>
-                <div class="field-hint">AES 加密。密码丢了没有任何后门可以找回，务必记牢</div>
+                <div class="field-hint">AES encryption. If the password is lost, there is no backdoor to retrieve it, please remember it carefully</div>
               </div>
-              <button class="btn primary wide" @click="applyProtect">加密输出</button>
+              <button class="btn primary wide" @click="applyProtect">Output Encrypted</button>
             </template>
 
             <!-- 解密 -->
             <template v-else-if="tool === 'unlock'">
               <div class="field" v-if="doc.password">
-                <div class="field-label">当前文档已用密码解锁</div>
-                <div class="field-hint">输出一份无密码副本，之后任何人都能直接打开</div>
+                <div class="field-label">Current document is unlocked with password</div>
+                <div class="field-hint">Output a password-free copy, which anyone can open directly later</div>
               </div>
               <div class="field" v-else>
-                <div class="field-label">当前文档没有打开密码</div>
-                <div class="field-hint">无需解密。要处理加密文件，直接打开它并输入密码即可</div>
+                <div class="field-label">Current document has no open password</div>
+                <div class="field-hint">No decryption needed. To process an encrypted file, simply open it and enter the password</div>
               </div>
-              <button class="btn primary wide" :disabled="!doc.password" @click="applyUnlock">移除密码输出</button>
+              <button class="btn primary wide" :disabled="!doc.password" @click="applyUnlock">Output without Password</button>
             </template>
 
             <!-- 压缩 -->
             <template v-else-if="tool === 'compress'">
               <div class="field">
-                <div class="field-label">清晰度</div>
+                <div class="field-label">Resolution</div>
                 <div class="segmented">
-                  <button v-for="d in [[110, '较小'], [150, '均衡'], [200, '较清晰']]" :key="d[0]" :class="{ active: cmp.dpi === d[0] }" @click="cmp.dpi = d[0]">{{ d[1] }}</button>
+                  <button v-for="d in [[110, 'Smaller'], [150, 'Balanced'], [200, 'Sharper']]" :key="d[0]" :class="{ active: cmp.dpi === d[0] }" @click="cmp.dpi = d[0]">{{ d[1] }}</button>
                 </div>
-                <div class="field-hint">整页栅格化重建，适合扫描件；文字型 PDF 压缩后文字不可选</div>
+                <div class="field-hint">Full page rasterization reconstruction, suitable for scanned documents; text in text-based PDFs will become unselectable after compression</div>
               </div>
-              <button class="btn primary wide" @click="applyCompress">开始压缩</button>
+              <button class="btn primary wide" @click="applyCompress">Start Compression</button>
             </template>
           </aside>
         </div>
@@ -2073,7 +2073,7 @@ const emptyCopy = computed(() => {
 
     <!-- 拖拽遮罩 -->
     <div v-if="dragging" class="drag-overlay">
-      <div class="drag-overlay-text">松手，交给轻卷</div>
+      <div class="drag-overlay-text">Release to Nexus PDF</div>
     </div>
 
     <!-- 任务进度 -->
@@ -2083,7 +2083,7 @@ const emptyCopy = computed(() => {
         <div class="progress-bar">
           <div class="progress-fill" :style="{ width: busy.total ? (busy.done / busy.total) * 100 + '%' : '30%' }"></div>
         </div>
-        <div class="busy-count" v-if="busy.total > 1">{{ busy.done }} / {{ busy.total }} 页</div>
+        <div class="busy-count" v-if="busy.total > 1">{{ busy.done }} / {{ busy.total }} Pages</div>
       </div>
     </div>
   </div>
@@ -2123,6 +2123,11 @@ const emptyCopy = computed(() => {
   display: block;
 }
 .brand-name {
+  letter-spacing: -0.5px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #5E5CE6, #7c7be0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
   font-size: 17px;
   font-weight: 700;
   line-height: 1.2;
@@ -2444,6 +2449,7 @@ const emptyCopy = computed(() => {
   padding: 0 6px;
   text-align: center;
   border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
   border-radius: 6px;
   color: var(--text-1);
   font-size: 12px;
@@ -2647,6 +2653,7 @@ const emptyCopy = computed(() => {
   padding: 4px 5px 4px 10px;
   background: rgba(255, 255, 255, 0.97);
   border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
   border-radius: 9px;
   box-shadow: 0 8px 28px rgba(26, 34, 51, 0.18);
 }
@@ -2901,6 +2908,7 @@ const emptyCopy = computed(() => {
   width: 100%;
   padding: 7px 11px;
   border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
   border-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--text-1);
@@ -3031,6 +3039,7 @@ const emptyCopy = computed(() => {
   color: var(--text-2);
   background: #fff;
   border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
 }
 .btn.ghost:hover {
   color: var(--primary);

@@ -1,14 +1,14 @@
 {
-  "name": "lightscroll",
+  "name": "nexus-pdf",
   "version": "1.1.0",
-  "description": "轻卷 LightScroll - 本地 PDF 工具箱。阅读、水印(图层/防删除)、加密解密、合并拆分、转图片、压缩。",
+  "description": "Nexus PDF - Local PDF Toolbox. Reader, Watermark, Encrypt/Decrypt, Merge/Split, Export Images, Compress.",
   "private": true,
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build"
   },
-  "author": "云中江树",
+  "author": "Nexus Bench",
   "license": "MIT",
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"

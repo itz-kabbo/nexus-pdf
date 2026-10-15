@@ -3,3 +3,6 @@ frontend/dist
 src-tauri/target
 src-tauri/gen/schemas
 .DS_Store
+
+_lightscroll_ref/
+design_update.py

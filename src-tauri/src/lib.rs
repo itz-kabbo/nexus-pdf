@@ -8,7 +8,7 @@ fn output_path(input: String, suffix: String, ext: String) -> String {
     let stem = p
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "文档".into());
+        .unwrap_or_else(|| "document".into());
     let mut out = dir.join(format!("{stem}{suffix}.{ext}"));
     let mut i = 2;
     while out.exists() {

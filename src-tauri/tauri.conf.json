@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "LightScroll",
+  "productName": "Nexus PDF",
   "version": "1.1.0",
-  "identifier": "com.yzfly.lightscroll",
+  "identifier": "com.nexusbench.nexuspdf",
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "轻卷 LightScroll",
+        "title": "Nexus PDF",
         "width": 1200,
         "height": 800,
         "minWidth": 920,
@@ -44,7 +44,7 @@
     },
     "windows": {
       "nsis": {
-        "languages": ["SimpChinese", "English"]
+        "languages": ["English"]
       }
     }
   }
